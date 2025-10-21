@@ -341,6 +341,13 @@ hardware_interface::CallbackReturn OpenArm_v10HW::on_configure(
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   openarm_->recv_all();
 
+  // Set all motors to MIT mode (CTRL_MODE = 1)
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
+              "Setting all motors to MIT mode (CTRL_MODE=1)...");
+  openarm_->write_param_all(static_cast<int>(openarm::damiao_motor::RID::CTRL_MODE), 1);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  openarm_->recv_all();
+
   return CallbackReturn::SUCCESS;
 }
 
