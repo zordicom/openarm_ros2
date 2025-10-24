@@ -432,7 +432,9 @@ hardware_interface::CallbackReturn OpenArm_v10HW::on_activate(
   openarm_->recv_all();
 
   // Return to zero position
-  return_to_zero();
+  // Commented out to prevent accidental collisions during startup
+  // Motors will remain at their current position when enabled
+  // return_to_zero();
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"), "OpenArm V10 activated");
   return CallbackReturn::SUCCESS;
