@@ -26,6 +26,32 @@
 #include "rclcpp/logging.hpp"
 #include "rclcpp/rclcpp.hpp"
 
+namespace {
+// Helper function to convert motor error code to human-readable string
+std::string error_code_to_string(uint8_t error_code) {
+  switch (error_code) {
+    case 0x1:
+      return "No error";
+    case 0x8:
+      return "Overvoltage";
+    case 0x9:
+      return "Undervoltage";
+    case 0xA:
+      return "Overcurrent";
+    case 0xB:
+      return "MOS overtemperature";
+    case 0xC:
+      return "Motor coil overtemperature";
+    case 0xD:
+      return "Communication loss";
+    case 0xE:
+      return "Overload";
+    default:
+      return "Unknown error (0x" + std::to_string(error_code) + ")";
+  }
+}
+}  // namespace
+
 // YAML conversion implementations
 namespace YAML {
 
@@ -293,8 +319,19 @@ hardware_interface::CallbackReturn OpenArm_v10HW::on_init(
               "Initializing OpenArm on %s with CAN-FD %s...",
               config_.can_iface.c_str(),
               config_.can_fd ? "enabled" : "disabled");
-  openarm_ = std::make_unique<openarm::can::socket::OpenArm>(config_.can_iface,
-                                                             config_.can_fd);
+
+  try {
+    openarm_ = std::make_unique<openarm::can::socket::OpenArm>(config_.can_iface,
+                                                               config_.can_fd);
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
+                 "Failed to initialize OpenArm on interface %s: %s",
+                 config_.can_iface.c_str(), e.what());
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
+                 "Possible causes: CAN interface not found, interface down, "
+                 "permission denied, or driver not loaded");
+    return CallbackReturn::ERROR;
+  }
 
   // Build arrays from arm configs for initialization
   std::vector<openarm::damiao_motor::MotorType> arm_motor_types;
@@ -427,15 +464,43 @@ hardware_interface::return_type OpenArm_v10HW::read(
   assert(arm_motors.size() == config_.arm_joints.size());
 
   for (size_t i = 0; i < arm_motors.size(); ++i) {
-    pos_states_[i] = arm_motors[i].get_position();
-    vel_states_[i] = arm_motors[i].get_velocity();
-    tau_states_[i] = arm_motors[i].get_torque();
+    const auto& motor = arm_motors[i];
+
+    // Check for unrecoverable motor errors
+    if (motor.has_unrecoverable_error()) {
+      uint8_t error_code = motor.get_state_error();
+      std::string error_msg = error_code_to_string(error_code);
+      RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
+                   "Arm motor %zu (CAN ID 0x%03X) has unrecoverable error: %s (0x%X). "
+                   "Stopping controller.",
+                   i, motor.get_send_can_id(), error_msg.c_str(), error_code);
+      return hardware_interface::return_type::ERROR;
+    }
+
+    pos_states_[i] = motor.get_position();
+    vel_states_[i] = motor.get_velocity();
+    tau_states_[i] = motor.get_torque();
   }
 
   // Read gripper state if enabled
   if (config_.gripper_joint.has_value()) {
     size_t gripper_idx = config_.arm_joints.size();
     const auto& gripper_motors = openarm_->get_gripper().get_motors();
+
+    // Check all gripper motors for errors
+    for (size_t i = 0; i < gripper_motors.size(); ++i) {
+      const auto& motor = gripper_motors[i];
+      if (motor.has_unrecoverable_error()) {
+        uint8_t error_code = motor.get_state_error();
+        std::string error_msg = error_code_to_string(error_code);
+        RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
+                     "Gripper motor %zu (CAN ID 0x%03X) has unrecoverable error: %s (0x%X). "
+                     "Stopping controller.",
+                     i, motor.get_send_can_id(), error_msg.c_str(), error_code);
+        return hardware_interface::return_type::ERROR;
+      }
+    }
+
     if (!gripper_motors.empty()) {
       // TODO the mappings are approximates
       // Convert motor position (radians) to joint value
@@ -454,6 +519,36 @@ hardware_interface::return_type OpenArm_v10HW::read(
 
 hardware_interface::return_type OpenArm_v10HW::write(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
+  // Check arm motors for errors before sending commands
+  const auto& arm_motors = openarm_->get_arm().get_motors();
+  for (size_t i = 0; i < arm_motors.size(); ++i) {
+    const auto& motor = arm_motors[i];
+    if (motor.has_unrecoverable_error()) {
+      uint8_t error_code = motor.get_state_error();
+      std::string error_msg = error_code_to_string(error_code);
+      RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
+                   "Cannot send commands: Arm motor %zu (CAN ID 0x%03X) has unrecoverable error: %s (0x%X).",
+                   i, motor.get_send_can_id(), error_msg.c_str(), error_code);
+      return hardware_interface::return_type::ERROR;
+    }
+  }
+
+  // Check gripper motors for errors before sending commands
+  if (config_.gripper_joint.has_value()) {
+    const auto& gripper_motors = openarm_->get_gripper().get_motors();
+    for (size_t i = 0; i < gripper_motors.size(); ++i) {
+      const auto& motor = gripper_motors[i];
+      if (motor.has_unrecoverable_error()) {
+        uint8_t error_code = motor.get_state_error();
+        std::string error_msg = error_code_to_string(error_code);
+        RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
+                     "Cannot send commands: Gripper motor %zu (CAN ID 0x%03X) has unrecoverable error: %s (0x%X).",
+                     i, motor.get_send_can_id(), error_msg.c_str(), error_code);
+        return hardware_interface::return_type::ERROR;
+      }
+    }
+  }
+
   // Control arm motors with MIT control
   std::vector<openarm::damiao_motor::MITParam> arm_params;
   for (size_t i = 0; i < config_.arm_joints.size(); ++i) {
