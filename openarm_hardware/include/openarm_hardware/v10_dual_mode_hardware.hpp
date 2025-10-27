@@ -184,7 +184,6 @@ class OpenArm_v10DualModeHW : public hardware_interface::SystemInterface {
       const std::vector<std::string>& interfaces);
 
   // Position mode control
-  bool send_position_speed_command(uint32_t can_id, double position, double velocity);
   bool send_position_commands();
 
   // MIT mode control

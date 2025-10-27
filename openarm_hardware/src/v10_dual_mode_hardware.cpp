@@ -23,9 +23,11 @@
 
 #include <cassert>
 #include <cstring>
+#include <openarm/damiao_motor/dm_motor_control.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <thread>
-#include <openarm/damiao_motor/dm_motor_control.hpp>
+
+#include "hardware_interface/types/hardware_interface_type_values.hpp"
 
 namespace openarm_hardware {
 
@@ -36,7 +38,6 @@ OpenArm_v10DualModeHW::OpenArm_v10DualModeHW() {
 
 hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_init(
     const hardware_interface::HardwareInfo& info) {
-
   if (hardware_interface::SystemInterface::on_init(info) !=
       hardware_interface::CallbackReturn::SUCCESS) {
     return hardware_interface::CallbackReturn::ERROR;
@@ -89,7 +90,8 @@ hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_init(
   }
 
   // Initialize arm motors
-  openarm_->init_arm_motors(arm_motor_types, arm_send_can_ids, arm_recv_can_ids);
+  openarm_->init_arm_motors(arm_motor_types, arm_send_can_ids,
+                            arm_recv_can_ids);
 
   // Initialize gripper if enabled
   if (config_.gripper_joint.has_value()) {
@@ -123,8 +125,9 @@ hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_configure(
   openarm_->recv_all();
 
   // Don't set control mode here - wait for interface claiming
-  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-              "Hardware configured. Mode will be set on controller activation.");
+  RCLCPP_INFO(
+      rclcpp::get_logger("OpenArm_v10DualModeHW"),
+      "Hardware configured. Mode will be set on controller activation.");
 
   return CallbackReturn::SUCCESS;
 }
@@ -151,9 +154,11 @@ OpenArm_v10DualModeHW::export_command_interfaces() {
 
   for (size_t i = 0; i < joint_names_.size(); ++i) {
     command_interfaces.emplace_back(hardware_interface::CommandInterface(
-        joint_names_[i], hardware_interface::HW_IF_POSITION, &pos_commands_[i]));
+        joint_names_[i], hardware_interface::HW_IF_POSITION,
+        &pos_commands_[i]));
     command_interfaces.emplace_back(hardware_interface::CommandInterface(
-        joint_names_[i], hardware_interface::HW_IF_VELOCITY, &vel_commands_[i]));
+        joint_names_[i], hardware_interface::HW_IF_VELOCITY,
+        &vel_commands_[i]));
     command_interfaces.emplace_back(hardware_interface::CommandInterface(
         joint_names_[i], hardware_interface::HW_IF_EFFORT, &tau_commands_[i]));
   }
@@ -161,10 +166,10 @@ OpenArm_v10DualModeHW::export_command_interfaces() {
   return command_interfaces;
 }
 
-hardware_interface::return_type OpenArm_v10DualModeHW::prepare_command_mode_switch(
+hardware_interface::return_type
+OpenArm_v10DualModeHW::prepare_command_mode_switch(
     const std::vector<std::string>& start_interfaces,
     const std::vector<std::string>& stop_interfaces) {
-
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
               "Preparing command mode switch...");
 
@@ -173,8 +178,8 @@ hardware_interface::return_type OpenArm_v10DualModeHW::prepare_command_mode_swit
     RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
                 "Starting interfaces:");
     for (const auto& interface : start_interfaces) {
-      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                  "  - %s", interface.c_str());
+      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"), "  - %s",
+                  interface.c_str());
     }
   }
 
@@ -182,8 +187,8 @@ hardware_interface::return_type OpenArm_v10DualModeHW::prepare_command_mode_swit
     RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
                 "Stopping interfaces:");
     for (const auto& interface : stop_interfaces) {
-      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                  "  - %s", interface.c_str());
+      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"), "  - %s",
+                  interface.c_str());
     }
   }
 
@@ -218,26 +223,29 @@ hardware_interface::return_type OpenArm_v10DualModeHW::prepare_command_mode_swit
     if (effort_interface_claimed_) {
       new_mode = ControlMode::MIT;
     } else if (position_interface_claimed_) {
-      new_mode = ControlMode::POSITION;
+      new_mode = ControlMode::POSITION_VELOCITY;
     }
   }
 
   pending_mode_ = new_mode;
 
-  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-              "Mode switch prepared: %s -> %s",
-              current_mode_ == ControlMode::MIT ? "MIT" :
-              current_mode_ == ControlMode::POSITION_VELOCITY ? "POSITION_VELOCITY" : "UNINITIALIZED",
-              pending_mode_ == ControlMode::MIT ? "MIT" :
-              pending_mode_ == ControlMode::POSITION_VELOCITY ? "POSITION_VELOCITY" : "UNINITIALIZED");
+  RCLCPP_INFO(
+      rclcpp::get_logger("OpenArm_v10DualModeHW"),
+      "Mode switch prepared: %s -> %s",
+      current_mode_ == ControlMode::MIT                 ? "MIT"
+      : current_mode_ == ControlMode::POSITION_VELOCITY ? "POSITION_VELOCITY"
+                                                        : "UNINITIALIZED",
+      pending_mode_ == ControlMode::MIT                 ? "MIT"
+      : pending_mode_ == ControlMode::POSITION_VELOCITY ? "POSITION_VELOCITY"
+                                                        : "UNINITIALIZED");
 
   return hardware_interface::return_type::OK;
 }
 
-hardware_interface::return_type OpenArm_v10DualModeHW::perform_command_mode_switch(
+hardware_interface::return_type
+OpenArm_v10DualModeHW::perform_command_mode_switch(
     const std::vector<std::string>& /*start_interfaces*/,
     const std::vector<std::string>& /*stop_interfaces*/) {
-
   if (pending_mode_ == current_mode_) {
     RCLCPP_DEBUG(rclcpp::get_logger("OpenArm_v10DualModeHW"),
                  "No mode change needed");
@@ -272,16 +280,12 @@ hardware_interface::return_type OpenArm_v10DualModeHW::perform_command_mode_swit
 
 ControlMode OpenArm_v10DualModeHW::determine_mode_from_interfaces(
     const std::vector<std::string>& interfaces) {
-
   bool has_position = false;
-  bool has_velocity = false;
   bool has_effort = false;
 
   for (const auto& interface : interfaces) {
     if (interface.find("/position") != std::string::npos) {
       has_position = true;
-    } else if (interface.find("/velocity") != std::string::npos) {
-      has_velocity = true;
     } else if (interface.find("/effort") != std::string::npos) {
       has_effort = true;
     }
@@ -305,7 +309,8 @@ bool OpenArm_v10DualModeHW::switch_to_position_mode() {
               "Switching motors to Position-Velocity Mode (CTRL_MODE=2)...");
 
   // Set all motors to position-velocity mode (CTRL_MODE = 2)
-  openarm_->write_param_all(static_cast<int>(openarm::damiao_motor::RID::CTRL_MODE), 2);
+  openarm_->write_param_all(
+      static_cast<int>(openarm::damiao_motor::RID::CTRL_MODE), 2);
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   openarm_->recv_all();
 
@@ -317,7 +322,8 @@ bool OpenArm_v10DualModeHW::switch_to_mit_mode() {
               "Switching motors to MIT Mode (CTRL_MODE=1)...");
 
   // Set all motors to MIT mode (CTRL_MODE = 1)
-  openarm_->write_param_all(static_cast<int>(openarm::damiao_motor::RID::CTRL_MODE), 1);
+  openarm_->write_param_all(
+      static_cast<int>(openarm::damiao_motor::RID::CTRL_MODE), 1);
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   openarm_->recv_all();
 
@@ -325,17 +331,23 @@ bool OpenArm_v10DualModeHW::switch_to_mit_mode() {
 }
 
 void OpenArm_v10DualModeHW::log_mode_switch(ControlMode from, ControlMode to) {
-  std::string from_str = from == ControlMode::MIT ? "MIT" :
-                         from == ControlMode::POSITION_VELOCITY ? "POSITION_VELOCITY" : "UNINITIALIZED";
-  std::string to_str = to == ControlMode::MIT ? "MIT" :
-                       to == ControlMode::POSITION_VELOCITY ? "POSITION_VELOCITY" : "UNINITIALIZED";
+  std::string from_str = from == ControlMode::MIT ? "MIT"
+                         : from == ControlMode::POSITION_VELOCITY
+                             ? "POSITION_VELOCITY"
+                             : "UNINITIALIZED";
+  std::string to_str = to == ControlMode::MIT ? "MIT"
+                       : to == ControlMode::POSITION_VELOCITY
+                           ? "POSITION_VELOCITY"
+                           : "UNINITIALIZED";
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-              "Control mode switched: %s -> %s", from_str.c_str(), to_str.c_str());
+              "Control mode switched: %s -> %s", from_str.c_str(),
+              to_str.c_str());
 
   if (to == ControlMode::POSITION_VELOCITY) {
-    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                "Position-Velocity mode active: Using internal motor PID control");
+    RCLCPP_INFO(
+        rclcpp::get_logger("OpenArm_v10DualModeHW"),
+        "Position-Velocity mode active: Using internal motor PID control");
   } else if (to == ControlMode::MIT) {
     RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
                 "MIT mode active: Using external impedance control");
@@ -344,7 +356,6 @@ void OpenArm_v10DualModeHW::log_mode_switch(ControlMode from, ControlMode to) {
 
 hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_activate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
-
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
               "Activating OpenArm V10...");
 
@@ -388,7 +399,6 @@ hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_activate(
 
 hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_deactivate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
-
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"), "Deactivating...");
 
   return_to_zero();
@@ -406,7 +416,6 @@ hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_deactivate(
 
 hardware_interface::return_type OpenArm_v10DualModeHW::read(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
-
   // Read arm motor states
   const auto& arm_motors = openarm_->get_arm().get_motors();
   for (size_t i = 0; i < arm_motors.size(); ++i) {
@@ -444,7 +453,6 @@ hardware_interface::return_type OpenArm_v10DualModeHW::read(
 
 hardware_interface::return_type OpenArm_v10DualModeHW::write(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
-
   // Skip write if mode not initialized
   if (current_mode_ == ControlMode::UNINITIALIZED) {
     return hardware_interface::return_type::OK;
@@ -482,11 +490,19 @@ bool OpenArm_v10DualModeHW::send_position_commands() {
   for (size_t i = 0; i < config_.arm_joints.size(); ++i) {
     const auto& motor = config_.arm_joints[i];
     double position = pos_commands_[i];
-    double velocity = vel_commands_[i];
 
-    // Limit velocity to max configured velocity
-    if (std::abs(velocity) > motor.max_velocity) {
-      velocity = std::copysign(motor.max_velocity, velocity);
+    // Use velocity command if velocity interface is claimed, otherwise use
+    // max_velocity
+    double velocity;
+    if (velocity_interface_claimed_) {
+      velocity = vel_commands_[i];
+      // Limit velocity to max configured velocity
+      if (std::abs(velocity) > motor.max_velocity) {
+        velocity = std::copysign(motor.max_velocity, velocity);
+      }
+    } else {
+      // Default to max velocity when only position interface is claimed
+      velocity = motor.max_velocity;
     }
 
     arm_params.push_back({position, velocity});
@@ -499,51 +515,27 @@ bool OpenArm_v10DualModeHW::send_position_commands() {
   if (config_.gripper_joint.has_value()) {
     const auto& gripper = config_.gripper_joint.value();
     size_t idx = config_.arm_joints.size();
-    double motor_position = gripper_joint_to_motor_radians(gripper, pos_commands_[idx]);
-    double motor_velocity = vel_commands_[idx];  // TODO: scale velocity appropriately
+    double motor_position =
+        gripper_joint_to_motor_radians(gripper, pos_commands_[idx]);
 
-    if (std::abs(motor_velocity) > gripper.max_velocity) {
-      motor_velocity = std::copysign(gripper.max_velocity, motor_velocity);
+    // Use velocity command if velocity interface is claimed, otherwise use
+    // max_velocity
+    double motor_velocity;
+    if (velocity_interface_claimed_) {
+      motor_velocity = vel_commands_[idx];
+      if (std::abs(motor_velocity) > gripper.max_velocity) {
+        motor_velocity = std::copysign(gripper.max_velocity, motor_velocity);
+      }
+    } else {
+      // Default to max velocity when only position interface is claimed
+      motor_velocity = gripper.max_velocity;
     }
 
-    openarm_->get_gripper().pos_vel_control_all({{motor_position, motor_velocity}});
+    openarm_->get_gripper().pos_vel_control_all(
+        {{motor_position, motor_velocity}});
   }
 
   return true;
-}
-
-bool OpenArm_v10DualModeHW::send_position_speed_command(
-    uint32_t can_id, double position, double velocity) {
-
-  RCLCPP_DEBUG(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-               "Sending position-velocity command: CAN ID=0x%02X, pos=%.3f rad, vel=%.3f rad/s",
-               can_id, position, velocity);
-
-  // Use the OpenArm library's position-velocity control method
-  // Following the same pattern as MIT control
-  openarm::damiao_motor::PosVelParam pos_vel_param = {position, velocity};
-
-  // Find the motor and send position-velocity command
-  auto& arm_motors = openarm_->get_arm().get_motors();
-  for (auto& motor : arm_motors) {
-    if (motor.get_send_can_id() == can_id) {
-      motor.pos_vel_control(pos_vel_param);
-      return true;
-    }
-  }
-
-  // Check gripper motors
-  if (config_.gripper_joint.has_value()) {
-    auto& gripper_motors = openarm_->get_gripper().get_motors();
-    for (auto& motor : gripper_motors) {
-      if (motor.get_send_can_id() == can_id) {
-        motor.pos_vel_control(pos_vel_param);
-        return true;
-      }
-    }
-  }
-
-  return false;
 }
 
 bool OpenArm_v10DualModeHW::send_mit_commands() {
@@ -560,7 +552,8 @@ bool OpenArm_v10DualModeHW::send_mit_commands() {
   if (config_.gripper_joint.has_value()) {
     const auto& gripper = config_.gripper_joint.value();
     size_t idx = config_.arm_joints.size();
-    double motor_command = gripper_joint_to_motor_radians(gripper, pos_commands_[idx]);
+    double motor_command =
+        gripper_joint_to_motor_radians(gripper, pos_commands_[idx]);
 
     openarm_->get_gripper().mit_control_all(
         {{gripper.kp, gripper.kd, motor_command, 0, 0}});
@@ -574,14 +567,18 @@ void OpenArm_v10DualModeHW::return_to_zero() {
               "Returning to zero position...");
 
   if (current_mode_ == ControlMode::POSITION_VELOCITY) {
-    // Use position commands for zero
+    // Use position-velocity control for zero
+    std::vector<openarm::damiao_motor::PosVelParam> arm_params;
     for (size_t i = 0; i < config_.arm_joints.size(); ++i) {
-      send_position_speed_command(config_.arm_joints[i].send_can_id, 0.0, 0.0);
+      arm_params.push_back({0.0, 0.0});
     }
+    openarm_->get_arm().pos_vel_control_all(arm_params);
+
     if (config_.gripper_joint.has_value()) {
       const auto& gripper = config_.gripper_joint.value();
-      double motor_zero = gripper_joint_to_motor_radians(gripper, gripper.closed_position);
-      send_position_speed_command(gripper.send_can_id, motor_zero, 0.0);
+      double motor_zero =
+          gripper_joint_to_motor_radians(gripper, gripper.closed_position);
+      openarm_->get_gripper().pos_vel_control_all({{motor_zero, 0.0}});
     }
   } else {
     // Use MIT control for zero
@@ -605,7 +602,8 @@ void OpenArm_v10DualModeHW::return_to_zero() {
 // Helper methods implementation (parse_config, generate_joint_names, etc.)
 // These are copied from the original implementation with minor modifications
 
-bool OpenArm_v10DualModeHW::parse_config(const hardware_interface::HardwareInfo& info) {
+bool OpenArm_v10DualModeHW::parse_config(
+    const hardware_interface::HardwareInfo& info) {
   // Get motor config file path
   auto it = info.hardware_parameters.find("motor_config_file");
   if (it == info.hardware_parameters.end()) {
@@ -635,7 +633,8 @@ bool OpenArm_v10DualModeHW::generate_joint_names() {
   return !joint_names_.empty();
 }
 
-bool OpenArm_v10DualModeHW::load_motor_config_from_yaml(const std::string& yaml_file) {
+bool OpenArm_v10DualModeHW::load_motor_config_from_yaml(
+    const std::string& yaml_file) {
   try {
     YAML::Node config = YAML::LoadFile(yaml_file);
     config_ = config.as<ControllerConfig>();
@@ -652,85 +651,13 @@ bool OpenArm_v10DualModeHW::load_motor_config_from_yaml(const std::string& yaml_
     return true;
   } catch (const std::exception& e) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                 "Failed to load config from %s: %s",
-                 yaml_file.c_str(), e.what());
+                 "Failed to load config from %s: %s", yaml_file.c_str(),
+                 e.what());
     return false;
   }
 }
 
-// Gripper conversion functions
-double gripper_joint_to_motor_radians(const GripperConfig& config,
-                                      double joint_value) {
-  double t = (joint_value - config.closed_position) /
-             (config.open_position - config.closed_position);
-  t = std::clamp(t, 0.0, 1.0);
-  return config.motor_closed_radians +
-         t * (config.motor_open_radians - config.motor_closed_radians);
-}
-
-double gripper_motor_radians_to_joint(const GripperConfig& config,
-                                      double motor_radians) {
-  double t = (motor_radians - config.motor_closed_radians) /
-             (config.motor_open_radians - config.motor_closed_radians);
-  t = std::clamp(t, 0.0, 1.0);
-  return config.closed_position +
-         t * (config.open_position - config.closed_position);
-}
-
 }  // namespace openarm_hardware
-
-// YAML conversion implementations
-namespace YAML {
-
-bool convert<openarm_hardware::MotorConfig>::decode(
-    const Node& node, openarm_hardware::MotorConfig& config) {
-  config.name = node["name"].as<std::string>();
-  config.type = openarm::damiao_motor::string_to_motor_type(
-      node["type"].as<std::string>());
-  config.send_can_id = node["send_can_id"].as<uint32_t>();
-  config.recv_can_id = node["recv_can_id"].as<uint32_t>();
-  config.kp = node["kp"].as<double>(0.0);
-  config.kd = node["kd"].as<double>(0.0);
-  config.max_velocity = node["max_velocity"].as<double>(10.0);  // Default 10 rad/s
-  return true;
-}
-
-bool convert<openarm_hardware::GripperConfig>::decode(
-    const Node& node, openarm_hardware::GripperConfig& config) {
-  config.name = node["name"].as<std::string>();
-  config.motor_type = openarm::damiao_motor::string_to_motor_type(
-      node["motor_type"].as<std::string>());
-  config.send_can_id = node["send_can_id"].as<uint32_t>();
-  config.recv_can_id = node["recv_can_id"].as<uint32_t>();
-  config.kp = node["kp"].as<double>(0.0);
-  config.kd = node["kd"].as<double>(0.0);
-  config.closed_position = node["closed_position"].as<double>();
-  config.open_position = node["open_position"].as<double>();
-  config.motor_closed_radians = node["motor_closed_radians"].as<double>();
-  config.motor_open_radians = node["motor_open_radians"].as<double>();
-  config.max_velocity = node["max_velocity"].as<double>(5.0);  // Default 5 rad/s
-  return true;
-}
-
-bool convert<openarm_hardware::ControllerConfig>::decode(
-    const Node& node, openarm_hardware::ControllerConfig& config) {
-  config.can_iface = node["can_iface"].as<std::string>();
-  config.can_fd = node["can_fd"].as<bool>(false);
-
-  if (node["arm"]) {
-    for (const auto& motor_node : node["arm"]) {
-      config.arm_joints.push_back(motor_node.as<openarm_hardware::MotorConfig>());
-    }
-  }
-
-  if (node["gripper"]) {
-    config.gripper_joint = node["gripper"].as<openarm_hardware::GripperConfig>();
-  }
-
-  return true;
-}
-
-}  // namespace YAML
 
 #include "pluginlib/class_list_macros.hpp"
 
