@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "openarm_hardware/v10_dual_mode_hardware.hpp"
+#include "openarm_hardware/config_yaml.hpp"
 
 #include <linux/can.h>
 #include <linux/can/raw.h>

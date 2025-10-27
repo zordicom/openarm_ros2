@@ -30,6 +30,7 @@
 #include "hardware_interface/system_interface.hpp"
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "openarm_hardware/visibility_control.h"
+#include "openarm_hardware/hardware_config.hpp"
 #include "rclcpp/macros.hpp"
 #include "rclcpp_lifecycle/state.hpp"
 
@@ -46,53 +47,6 @@ enum class ControlMode {
   VELOCITY = 3,       // Velocity mode (not implemented)
   TORQUE_POSITION = 4 // Torque-Position mode (not implemented)
 };
-
-/**
- * @brief Configuration for a single motor
- */
-struct MotorConfig {
-  std::string name;
-  openarm::damiao_motor::MotorType type;
-  uint32_t send_can_id;
-  uint32_t recv_can_id;
-  double kp;      // Used in MIT mode
-  double kd;      // Used in MIT mode
-  double max_velocity;  // Max velocity for position mode (rad/s)
-};
-
-/**
- * @brief Configuration for the gripper
- */
-struct GripperConfig {
-  std::string name;
-  openarm::damiao_motor::MotorType motor_type;
-  uint32_t send_can_id;
-  uint32_t recv_can_id;
-  double kp;
-  double kd;
-  double closed_position;
-  double open_position;
-  double motor_closed_radians;
-  double motor_open_radians;
-  double max_velocity;  // Max velocity for position mode
-};
-
-struct ControllerConfig {
-  // Which interface to connect to.
-  std::string can_iface;
-
-  // Use CAN FD instead of standard CAN.
-  bool can_fd;
-
-  // Configuration storage using POD types
-  std::vector<MotorConfig> arm_joints;
-  std::optional<GripperConfig> gripper_joint;
-};
-
-double gripper_joint_to_motor_radians(const GripperConfig& config,
-                                      double joint_value);
-double gripper_motor_radians_to_joint(const GripperConfig& config,
-                                      double motor_radians);
 
 /**
  * @brief Dual-mode OpenArm V10 Hardware Interface
@@ -197,22 +151,3 @@ class OpenArm_v10DualModeHW : public hardware_interface::SystemInterface {
 };
 
 }  // namespace openarm_hardware
-
-// YAML conversion templates for our configuration structs
-namespace YAML {
-template <>
-struct convert<openarm_hardware::MotorConfig> {
-  static bool decode(const Node& node, openarm_hardware::MotorConfig& config);
-};
-
-template <>
-struct convert<openarm_hardware::GripperConfig> {
-  static bool decode(const Node& node, openarm_hardware::GripperConfig& config);
-};
-
-template <>
-struct convert<openarm_hardware::ControllerConfig> {
-  static bool decode(const Node& node,
-                     openarm_hardware::ControllerConfig& config);
-};
-}  // namespace YAML
