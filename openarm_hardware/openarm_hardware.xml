@@ -19,7 +19,15 @@
          type="openarm_hardware::OpenArm_v10HW"
          base_class_type="hardware_interface::SystemInterface">
     <description>
-      ros2_control hardware interface for OpenArm V10.
+      ros2_control hardware interface for OpenArm V10 (MIT mode only).
+    </description>
+  </class>
+  <class name="openarm_hardware/OpenArm_v10DualModeHW"
+         type="openarm_hardware::OpenArm_v10DualModeHW"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      Dual-mode ros2_control hardware interface for OpenArm V10.
+      Supports both MIT mode (effort interface) and Position-Velocity mode (position interface).
     </description>
   </class>
 </library>
