@@ -17,6 +17,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <openarm/can/socket/openarm.hpp>
@@ -148,6 +149,13 @@ class OpenArm_v10DualModeHW : public hardware_interface::SystemInterface {
 
   // Logging helpers
   void log_mode_switch(ControlMode from, ControlMode to);
+
+  // Power monitoring and logging
+  size_t power_query_counter_ = 0;
+  static constexpr size_t POWER_QUERY_INTERVAL = 50;  // Query power every 50 cycles (~333ms at 150 Hz)
+  std::ofstream power_log_file_;
+  bool power_logging_enabled_ = false;
+  rclcpp::Time power_log_start_time_;
 };
 
 }  // namespace openarm_hardware
