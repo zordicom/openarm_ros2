@@ -588,22 +588,13 @@ hardware_interface::return_type OpenArm_v10DualModeHW::write(
     if (power_query_counter_ >= POWER_QUERY_INTERVAL) {
       power_query_counter_ = 0;
 
-      // Switch to PARAM mode to receive parameter responses
-      openarm_->set_callback_mode_all(openarm::damiao_motor::CallbackMode::PARAM);
-
       // Send both queries back-to-back
       openarm_->query_param_all(static_cast<int>(openarm::damiao_motor::RID::IQ_c1));
       openarm_->query_param_all(static_cast<int>(openarm::damiao_motor::RID::VL_c1));
-
-      // Receive parameter responses with longer timeout for slow operations
-      openarm_->recv_all(2000);
-
-      // Switch back to STATE mode for normal motor feedback
-      openarm_->set_callback_mode_all(openarm::damiao_motor::CallbackMode::STATE);
     }
   }
 
-  // Receive motor feedback from control commands
+  // Receive all responses (both motor feedback and parameter queries)
   openarm_->recv_all(1000);
   return hardware_interface::return_type::OK;
 }
