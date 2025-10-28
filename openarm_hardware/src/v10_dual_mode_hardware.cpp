@@ -522,20 +522,6 @@ hardware_interface::return_type OpenArm_v10DualModeHW::read(
 
   // Power monitoring and logging
   if (power_logging_enabled_) {
-    // Periodically query current and voltage
-    power_query_counter_++;
-    if (power_query_counter_ >= POWER_QUERY_INTERVAL) {
-      power_query_counter_ = 0;
-
-      // Send both queries back-to-back
-      openarm_->query_param_all(static_cast<int>(openarm::damiao_motor::RID::IQ_c1));
-      openarm_->query_param_all(static_cast<int>(openarm::damiao_motor::RID::VL_c1));
-
-      // Wait for responses then receive all
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      openarm_->recv_all();
-    }
-
     // Write data to CSV file every cycle
     if (power_log_file_.is_open()) {
       // Write relative timestamp in seconds
@@ -596,6 +582,19 @@ hardware_interface::return_type OpenArm_v10DualModeHW::write(
     return hardware_interface::return_type::ERROR;
   }
 
+  // Query power parameters periodically for logging
+  if (power_logging_enabled_) {
+    power_query_counter_++;
+    if (power_query_counter_ >= POWER_QUERY_INTERVAL) {
+      power_query_counter_ = 0;
+
+      // Send both queries back-to-back
+      openarm_->query_param_all(static_cast<int>(openarm::damiao_motor::RID::IQ_c1));
+      openarm_->query_param_all(static_cast<int>(openarm::damiao_motor::RID::VL_c1));
+    }
+  }
+
+  // Receive all responses (both motor feedback and parameter queries)
   openarm_->recv_all(1000);
   return hardware_interface::return_type::OK;
 }
