@@ -523,11 +523,9 @@ hardware_interface::return_type OpenArm_v10DualModeHW::read(
   // Power monitoring and logging
   if (power_logging_enabled_) {
     // Periodically query current and voltage
-    bool queried_power = false;
     power_query_counter_++;
     if (power_query_counter_ >= POWER_QUERY_INTERVAL) {
       power_query_counter_ = 0;
-      queried_power = true;
 
       // Send both queries back-to-back
       openarm_->query_param_all(static_cast<int>(openarm::damiao_motor::RID::IQ_c1));
@@ -548,11 +546,9 @@ hardware_interface::return_type OpenArm_v10DualModeHW::read(
       for (size_t i = 0; i < arm_motors.size(); ++i) {
         const auto& motor = arm_motors[i];
 
-        // Get current and voltage (will be stale values if not just queried)
-        double current = queried_power ? motor.get_param(
-            static_cast<int>(openarm::damiao_motor::RID::IQ_c1)) : 0.0;
-        double voltage = queried_power ? motor.get_param(
-            static_cast<int>(openarm::damiao_motor::RID::VL_c1)) : 0.0;
+        // Get current and voltage (returns last queried value)
+        double current = motor.get_param(static_cast<int>(openarm::damiao_motor::RID::IQ_c1));
+        double voltage = motor.get_param(static_cast<int>(openarm::damiao_motor::RID::VL_c1));
         double power = current * voltage;
 
         power_log_file_ << "," << pos_states_[i]
