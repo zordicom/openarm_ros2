@@ -23,13 +23,9 @@
 #include <unistd.h>
 
 #include <cassert>
-#include <chrono>
 #include <cstring>
-#include <ctime>
-#include <iomanip>
 #include <openarm/damiao_motor/dm_motor_control.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <sstream>
 #include <thread>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
@@ -399,79 +395,12 @@ hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_activate(
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
               "OpenArm V10 activated. Waiting for control mode selection...");
 
-  // Initialize power logging
-  const char* user_ws = std::getenv("USER_WS");
-  std::string log_dir = user_ws ? std::string(user_ws) + "/openarm_logs" : "/tmp/openarm_logs";
-  std::filesystem::create_directories(log_dir);
-
-  auto now = std::chrono::system_clock::now();
-  auto time_t = std::chrono::system_clock::to_time_t(now);
-  std::stringstream ss;
-  ss << log_dir << "/power_log_" << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S") << ".csv";
-  std::string log_filename = ss.str();
-
-  power_log_file_.open(log_filename, std::ios::out);
-  if (power_log_file_.is_open()) {
-    power_logging_enabled_ = true;
-    power_log_start_time_ = rclcpp::Clock().now();
-
-    // Write CSV header
-    power_log_file_ << "timestamp";
-
-    // Add columns for each motor
-    for (size_t i = 0; i < config_.arm_joints.size(); ++i) {
-      power_log_file_ << ",motor" << i << "_pos"
-                      << ",motor" << i << "_vel"
-                      << ",motor" << i << "_tau"
-                      << ",motor" << i << "_t_mos"
-                      << ",motor" << i << "_t_rotor"
-                      << ",motor" << i << "_current"
-                      << ",motor" << i << "_voltage"
-                      << ",motor" << i << "_power";
-    }
-    power_log_file_ << std::endl;
-
-    // Query and log overcurrent and overvoltage thresholds
-    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                "Querying motor safety thresholds...");
-
-    openarm_->query_param_all(static_cast<int>(openarm::damiao_motor::RID::OC_Value));
-    openarm_->query_param_all(static_cast<int>(openarm::damiao_motor::RID::OV_Value));
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    openarm_->recv_all();
-
-    const auto& arm_motors = openarm_->get_arm().get_motors();
-    for (size_t i = 0; i < arm_motors.size(); ++i) {
-      double oc_threshold = arm_motors[i].get_param(
-          static_cast<int>(openarm::damiao_motor::RID::OC_Value));
-      double ov_threshold = arm_motors[i].get_param(
-          static_cast<int>(openarm::damiao_motor::RID::OV_Value));
-
-      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                  "Motor %zu: OC=%.2fA, OV=%.2fV", i, oc_threshold, ov_threshold);
-    }
-
-    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                "Power logging enabled: %s", log_filename.c_str());
-  } else {
-    power_logging_enabled_ = false;
-    RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                "Failed to open power log file: %s", log_filename.c_str());
-  }
-
   return CallbackReturn::SUCCESS;
 }
 
 hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_deactivate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"), "Deactivating...");
-
-  // Close power log file if it was opened
-  if (power_logging_enabled_ && power_log_file_.is_open()) {
-    power_log_file_.close();
-    power_logging_enabled_ = false;
-    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"), "Power log file closed.");
-  }
 
   return_to_zero();
   openarm_->disable_all();
@@ -517,55 +446,6 @@ hardware_interface::return_type OpenArm_v10DualModeHW::read(
           config_.gripper_joint.value(), motor_pos);
       vel_states_[gripper_idx] = 0;  // TODO: implement velocity mapping
       tau_states_[gripper_idx] = 0;  // TODO: implement torque mapping
-    }
-  }
-
-  // Power monitoring and logging
-  if (power_logging_enabled_) {
-    // Periodically query current and voltage
-    bool queried_power = false;
-    power_query_counter_++;
-    if (power_query_counter_ >= POWER_QUERY_INTERVAL) {
-      power_query_counter_ = 0;
-      queried_power = true;
-
-      // Send both queries back-to-back
-      openarm_->query_param_all(static_cast<int>(openarm::damiao_motor::RID::IQ_c1));
-      openarm_->query_param_all(static_cast<int>(openarm::damiao_motor::RID::VL_c1));
-
-      // Wait for responses then receive all
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      openarm_->recv_all();
-    }
-
-    // Write data to CSV file every cycle
-    if (power_log_file_.is_open()) {
-      // Write relative timestamp in seconds
-      double relative_time = (rclcpp::Clock().now() - power_log_start_time_).seconds();
-      power_log_file_ << relative_time;
-
-      // Write data for each motor
-      for (size_t i = 0; i < arm_motors.size(); ++i) {
-        const auto& motor = arm_motors[i];
-
-        // Get current and voltage (will be stale values if not just queried)
-        double current = queried_power ? motor.get_param(
-            static_cast<int>(openarm::damiao_motor::RID::IQ_c1)) : 0.0;
-        double voltage = queried_power ? motor.get_param(
-            static_cast<int>(openarm::damiao_motor::RID::VL_c1)) : 0.0;
-        double power = current * voltage;
-
-        power_log_file_ << "," << pos_states_[i]
-                        << "," << vel_states_[i]
-                        << "," << tau_states_[i]
-                        << "," << motor.get_state_tmos()
-                        << "," << motor.get_state_trotor()
-                        << "," << current
-                        << "," << voltage
-                        << "," << power;
-      }
-
-      power_log_file_ << std::endl;
     }
   }
 
