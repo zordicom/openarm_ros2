@@ -379,30 +379,35 @@ hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_activate(
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   openarm_->recv_all();
 
-  // Read current motor positions and initialize commands to match
+  // Read current motor states and initialize commands for bumpless transfer
   openarm_->refresh_all();
   openarm_->recv_all();
 
   const auto& arm_motors = openarm_->get_arm().get_motors();
   for (size_t i = 0; i < arm_motors.size(); ++i) {
     pos_commands_[i] = arm_motors[i].get_position();
-    vel_commands_[i] = 0.0;
-    tau_commands_[i] = 0.0;
+    vel_commands_[i] = arm_motors[i].get_velocity();
+    tau_commands_[i] = arm_motors[i].get_torque();
     RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                "Initialized joint %zu command to current position: %.3f rad",
-                i, pos_commands_[i]);
+                "Initialized joint %zu: pos=%.3f rad, vel=%.3f rad/s, tau=%.3f Nm",
+                i, pos_commands_[i], vel_commands_[i], tau_commands_[i]);
   }
 
-  // Initialize gripper command to current position if enabled
+  // Initialize gripper commands to current state if enabled
   if (config_.gripper_joint.has_value()) {
     size_t gripper_idx = config_.arm_joints.size();
     const auto& gripper_motors = openarm_->get_gripper().get_motors();
     if (!gripper_motors.empty()) {
       double motor_pos = gripper_motors[0].get_position();
+      double motor_vel = gripper_motors[0].get_velocity();
+      double motor_tau = gripper_motors[0].get_torque();
       pos_commands_[gripper_idx] = gripper_motor_radians_to_joint(
           config_.gripper_joint.value(), motor_pos);
-      vel_commands_[gripper_idx] = 0.0;
-      tau_commands_[gripper_idx] = 0.0;
+      vel_commands_[gripper_idx] = motor_vel;  // TODO: apply velocity mapping if needed
+      tau_commands_[gripper_idx] = motor_tau;  // TODO: apply torque mapping if needed
+      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                  "Initialized gripper: pos=%.3f, vel=%.3f rad/s, tau=%.3f Nm",
+                  pos_commands_[gripper_idx], vel_commands_[gripper_idx], tau_commands_[gripper_idx]);
     }
   }
 
