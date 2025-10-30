@@ -253,30 +253,44 @@ OpenArm_v10DualModeHW::perform_command_mode_switch(
     return hardware_interface::return_type::OK;
   }
 
-  bool success = false;
+  // Just mark the mode switch as pending
+  // The actual switch will happen in write() after sending the last command
+  // in the current mode for a smooth transition
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+              "Mode switch from %s to %s will be performed after next write",
+              current_mode_ == ControlMode::MIT ? "MIT" :
+                (current_mode_ == ControlMode::POSITION_VELOCITY ? "POSITION_VELOCITY" : "UNINITIALIZED"),
+              pending_mode_ == ControlMode::MIT ? "MIT" : "POSITION_VELOCITY");
 
-  switch (pending_mode_) {
-    case ControlMode::POSITION_VELOCITY:
-      success = switch_to_position_mode();
-      break;
-    case ControlMode::MIT:
-      success = switch_to_mit_mode();
-      break;
-    default:
-      RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                  "Invalid pending mode");
-      break;
+  // If we're uninitialized, switch immediately
+  if (current_mode_ == ControlMode::UNINITIALIZED) {
+    bool success = false;
+    switch (pending_mode_) {
+      case ControlMode::POSITION_VELOCITY:
+        success = switch_to_position_mode();
+        break;
+      case ControlMode::MIT:
+        success = switch_to_mit_mode();
+        break;
+      default:
+        RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                    "Invalid pending mode");
+        break;
+    }
+
+    if (success) {
+      log_mode_switch(current_mode_, pending_mode_);
+      current_mode_ = pending_mode_;
+      return hardware_interface::return_type::OK;
+    } else {
+      RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                   "Failed to switch control mode");
+      return hardware_interface::return_type::ERROR;
+    }
   }
 
-  if (success) {
-    log_mode_switch(current_mode_, pending_mode_);
-    current_mode_ = pending_mode_;
-    return hardware_interface::return_type::OK;
-  } else {
-    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                 "Failed to switch control mode");
-    return hardware_interface::return_type::ERROR;
-  }
+  // Mode switch is pending and will be executed in write()
+  return hardware_interface::return_type::OK;
 }
 
 ControlMode OpenArm_v10DualModeHW::determine_mode_from_interfaces(
@@ -481,6 +495,38 @@ hardware_interface::return_type OpenArm_v10DualModeHW::write(
   }
 
   openarm_->recv_all(1000);
+
+  // After sending the command, check if we need to switch modes
+  // This ensures smooth transition by sending one last command in the old mode
+  // before switching to the new mode
+  if (pending_mode_ != current_mode_ && pending_mode_ != ControlMode::UNINITIALIZED) {
+    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                "Performing delayed mode switch from %s to %s after command",
+                current_mode_ == ControlMode::MIT ? "MIT" : "POSITION_VELOCITY",
+                pending_mode_ == ControlMode::MIT ? "MIT" : "POSITION_VELOCITY");
+
+    bool switch_success = false;
+    switch (pending_mode_) {
+      case ControlMode::POSITION_VELOCITY:
+        switch_success = switch_to_position_mode();
+        break;
+      case ControlMode::MIT:
+        switch_success = switch_to_mit_mode();
+        break;
+      default:
+        break;
+    }
+
+    if (switch_success) {
+      log_mode_switch(current_mode_, pending_mode_);
+      current_mode_ = pending_mode_;
+    } else {
+      RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                   "Failed to switch control mode after command");
+      return hardware_interface::return_type::ERROR;
+    }
+  }
+
   return hardware_interface::return_type::OK;
 }
 
