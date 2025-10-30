@@ -336,6 +336,35 @@ bool OpenArm_v10DualModeHW::switch_to_mit_mode() {
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
               "Switching motors to MIT Mode (CTRL_MODE=1)...");
 
+  // Seed torque commands from current motor state for bumpless transfer
+  openarm_->refresh_all();
+  openarm_->recv_all();
+
+  const auto& arm_motors = openarm_->get_arm().get_motors();
+  for (size_t i = 0; i < arm_motors.size(); ++i) {
+    pos_commands_[i] = arm_motors[i].get_position();
+    vel_commands_[i] = arm_motors[i].get_velocity();
+    tau_commands_[i] = arm_motors[i].get_torque();
+    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                "Seeding MIT mode joint %zu: pos=%.3f rad, vel=%.3f rad/s, tau=%.3f Nm",
+                i, pos_commands_[i], vel_commands_[i], tau_commands_[i]);
+  }
+
+  // Seed gripper commands if enabled
+  if (config_.gripper_joint.has_value()) {
+    size_t gripper_idx = config_.arm_joints.size();
+    const auto& gripper_motors = openarm_->get_gripper().get_motors();
+    if (!gripper_motors.empty()) {
+      double motor_pos = gripper_motors[0].get_position();
+      double motor_vel = gripper_motors[0].get_velocity();
+      double motor_tau = gripper_motors[0].get_torque();
+      pos_commands_[gripper_idx] = gripper_motor_radians_to_joint(
+          config_.gripper_joint.value(), motor_pos);
+      vel_commands_[gripper_idx] = motor_vel;
+      tau_commands_[gripper_idx] = motor_tau;
+    }
+  }
+
   // Set all motors to MIT mode (CTRL_MODE = 1)
   openarm_->write_param_all(
       static_cast<int>(openarm::damiao_motor::RID::CTRL_MODE), 1);
