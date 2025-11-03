@@ -343,7 +343,7 @@ hardware_interface::return_type OpenArm_v10HW::read(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
   // Receive all motor states
   openarm_->refresh_all();
-  openarm_->recv_all();
+  openarm_->recv_all(2000);  // Wait up to 2ms for all motor responses to reduce stale data
 
   // Read arm joint states
   const auto& arm_motors = openarm_->get_arm().get_motors();

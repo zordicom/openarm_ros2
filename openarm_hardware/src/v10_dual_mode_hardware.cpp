@@ -502,6 +502,10 @@ hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_deactivate(
 
 hardware_interface::return_type OpenArm_v10DualModeHW::read(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
+  // Request fresh motor states
+  openarm_->refresh_all();
+  openarm_->recv_all(2000);  // Wait up to 2ms for all motor responses to reduce stale data
+
   // Read arm motor states
   const auto& arm_motors = openarm_->get_arm().get_motors();
   for (size_t i = 0; i < arm_motors.size(); ++i) {
