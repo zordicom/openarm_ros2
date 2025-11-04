@@ -593,11 +593,12 @@ void OpenArm_v10HW::print_all_rid_values() {
                 config_.arm_joints[motor_idx].send_can_id,
                 config_.arm_joints[motor_idx].recv_can_id);
 
-    // Query each RID
+    // Query each RID for this specific motor
     for (const auto& rid_info : rid_list) {
-      openarm_->query_param_all(static_cast<int>(rid_info.rid));
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      openarm_->recv_all();
+      // Query this specific motor only
+      openarm_->get_arm().query_param_one(motor_idx, static_cast<int>(rid_info.rid));
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      openarm_->recv_all(1000);  // Increased timeout for better response capture
 
       // Get the value from the motor
       double value = arm_motors[motor_idx].get_param(static_cast<int>(rid_info.rid));
@@ -634,9 +635,10 @@ void OpenArm_v10HW::print_all_rid_values() {
                   config_.gripper_joint.value().recv_can_id);
 
       for (const auto& rid_info : rid_list) {
-        openarm_->query_param_all(static_cast<int>(rid_info.rid));
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        openarm_->recv_all();
+        // Query the gripper motor
+        openarm_->get_gripper().query_param_one(0, static_cast<int>(rid_info.rid));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        openarm_->recv_all(1000);
 
         double value = gripper_motors[0].get_param(static_cast<int>(rid_info.rid));
 
