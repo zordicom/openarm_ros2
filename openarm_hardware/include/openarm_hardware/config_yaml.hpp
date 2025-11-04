@@ -80,6 +80,7 @@ struct convert<openarm_hardware::ControllerConfig> {
   static bool decode(const Node& node, openarm_hardware::ControllerConfig& config) {
     config.can_iface = node["can_iface"].as<std::string>();
     config.can_fd = node["can_fd"].as<bool>(false);
+    config.enable_csv_logging = node["enable_csv_logging"].as<bool>(false);
 
     if (node["arm"]) {
       for (const auto& motor_node : node["arm"]) {

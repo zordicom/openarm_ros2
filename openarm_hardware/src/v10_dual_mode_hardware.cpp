@@ -477,6 +477,13 @@ hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_activate(
     }
   }
 
+  // Enable CSV logging if enabled in configuration
+  if (config_.enable_csv_logging) {
+    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                "Enabling CSV logging to USER_WS/openarm_can_logs");
+    openarm_->get_arm().enable_csv_logging("", "openarm_hardware");
+  }
+
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
               "Hardware activated, commands initialized from current state");
 
@@ -486,6 +493,13 @@ hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_activate(
 hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_deactivate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"), "Deactivating...");
+
+  // Disable CSV logging if it was enabled
+  if (config_.enable_csv_logging) {
+    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                "Disabling CSV logging");
+    openarm_->get_arm().disable_csv_logging();
+  }
 
   return_to_zero();
   openarm_->disable_all();
@@ -535,6 +549,11 @@ hardware_interface::return_type OpenArm_v10DualModeHW::read(
       vel_states_[gripper_idx] = 0;
       tau_states_[gripper_idx] = 0;
     }
+  }
+
+  // Log motor states to CSV if logging is enabled
+  if (config_.enable_csv_logging) {
+    openarm_->get_arm().log_motor_states();
   }
 
   return hardware_interface::return_type::OK;
