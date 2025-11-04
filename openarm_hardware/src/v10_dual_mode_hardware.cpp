@@ -779,6 +779,11 @@ void OpenArm_v10DualModeHW::print_all_rid_values() {
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
               "======================================");
 
+  // Set callback mode to PARAM for reading parameters
+  openarm_->set_callback_mode_all(openarm::damiao_motor::CallbackMode::PARAM);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  openarm_->recv_all();
+
   // Define RID names and descriptions for better readability
   struct RIDInfo {
     openarm::damiao_motor::RID rid;
@@ -787,56 +792,60 @@ void OpenArm_v10DualModeHW::print_all_rid_values() {
     bool is_uint32;  // true if value should be interpreted as uint32, false for float
   };
 
-  // List of important RIDs to query
+  // List of important RIDs to query (sorted by RID value)
   std::vector<RIDInfo> rid_list = {
-    // Voltage and protection
+    // Voltage and protection (0-3)
     {openarm::damiao_motor::RID::UV_Value, "UV_Value", "Undervoltage threshold (V)", false},
-    {openarm::damiao_motor::RID::OV_Value, "OV_Value", "Overvoltage threshold (V)", false},
+    {openarm::damiao_motor::RID::KT_Value, "KT_Value", "Motor torque constant (Nm/A)", false},
     {openarm::damiao_motor::RID::OT_Value, "OT_Value", "Overtemperature threshold (°C)", false},
     {openarm::damiao_motor::RID::OC_Value, "OC_Value", "Overcurrent threshold (A)", false},
 
-    // Motor constants
-    {openarm::damiao_motor::RID::KT_Value, "KT_Value", "Motor torque constant (Nm/A)", false},
+    // Motion limits (4-6)
+    {openarm::damiao_motor::RID::ACC, "ACC", "Acceleration (rad/s²)", false},
+    {openarm::damiao_motor::RID::DEC, "DEC", "Deceleration (rad/s²)", false},
+    {openarm::damiao_motor::RID::MAX_SPD, "MAX_SPD", "Maximum speed (rad/s)", false},
+
+    // CAN IDs and communication (7-10)
+    {openarm::damiao_motor::RID::MST_ID, "MST_ID", "Master CAN ID (recv ID)", true},
+    {openarm::damiao_motor::RID::ESC_ID, "ESC_ID", "ESC (motor) CAN ID", true},
+    {openarm::damiao_motor::RID::TIMEOUT, "TIMEOUT", "Communication timeout (ms)", true},
+    {openarm::damiao_motor::RID::CTRL_MODE, "CTRL_MODE", "Control mode (1=MIT, 2=PV)", true},
+
+    // Control parameters (11-12)
+    {openarm::damiao_motor::RID::Damp, "Damp", "Damping coefficient", false},
+    {openarm::damiao_motor::RID::Inertia, "Inertia", "Moment of inertia (kg·m²)", false},
+
+    // Version info (13-16)
+    {openarm::damiao_motor::RID::hw_ver, "hw_ver", "Hardware version", true},
+    {openarm::damiao_motor::RID::sw_ver, "sw_ver", "Software version", true},
+    {openarm::damiao_motor::RID::SN, "SN", "Serial number", true},
     {openarm::damiao_motor::RID::NPP, "NPP", "Number of pole pairs", true},
+
+    // Motor constants (17-20)
     {openarm::damiao_motor::RID::Rs, "Rs", "Stator resistance (Ohm)", false},
     {openarm::damiao_motor::RID::LS, "LS", "Stator inductance (H)", false},
     {openarm::damiao_motor::RID::Flux, "Flux", "Flux linkage (Wb)", false},
     {openarm::damiao_motor::RID::Gr, "Gr", "Gear ratio", false},
 
-    // Motion limits
-    {openarm::damiao_motor::RID::ACC, "ACC", "Acceleration (rad/s²)", false},
-    {openarm::damiao_motor::RID::DEC, "DEC", "Deceleration (rad/s²)", false},
-    {openarm::damiao_motor::RID::MAX_SPD, "MAX_SPD", "Maximum speed (rad/s)", false},
+    // Limits (21-23)
     {openarm::damiao_motor::RID::PMAX, "PMAX", "Max position (rad)", false},
     {openarm::damiao_motor::RID::VMAX, "VMAX", "Max velocity (rad/s)", false},
     {openarm::damiao_motor::RID::TMAX, "TMAX", "Max torque (Nm)", false},
 
-    // CAN IDs and communication
-    {openarm::damiao_motor::RID::MST_ID, "MST_ID", "Master CAN ID (recv ID)", true},
-    {openarm::damiao_motor::RID::ESC_ID, "ESC_ID", "ESC (motor) CAN ID", true},
-    {openarm::damiao_motor::RID::TIMEOUT, "TIMEOUT", "Communication timeout (ms)", true},
-    {openarm::damiao_motor::RID::can_br, "can_br", "CAN baudrate", true},
-
-    // Control mode and parameters
-    {openarm::damiao_motor::RID::CTRL_MODE, "CTRL_MODE", "Control mode (1=MIT, 2=PV)", true},
-    {openarm::damiao_motor::RID::Damp, "Damp", "Damping coefficient", false},
-    {openarm::damiao_motor::RID::Inertia, "Inertia", "Moment of inertia (kg·m²)", false},
-
-    // Control loop gains
+    // Control loop gains (24-28)
     {openarm::damiao_motor::RID::I_BW, "I_BW", "Current loop bandwidth (Hz)", false},
-    {openarm::damiao_motor::RID::V_BW, "V_BW", "Velocity loop bandwidth (Hz)", false},
     {openarm::damiao_motor::RID::KP_ASR, "KP_ASR", "Speed loop Kp", false},
     {openarm::damiao_motor::RID::KI_ASR, "KI_ASR", "Speed loop Ki", false},
     {openarm::damiao_motor::RID::KP_APR, "KP_APR", "Position loop Kp", false},
     {openarm::damiao_motor::RID::KI_APR, "KI_APR", "Position loop Ki", false},
 
-    // Version info
-    {openarm::damiao_motor::RID::hw_ver, "hw_ver", "Hardware version", true},
-    {openarm::damiao_motor::RID::sw_ver, "sw_ver", "Software version", true},
+    // Additional parameters (29-36)
+    {openarm::damiao_motor::RID::OV_Value, "OV_Value", "Overvoltage threshold (V)", false},
+    {openarm::damiao_motor::RID::V_BW, "V_BW", "Velocity loop bandwidth (Hz)", false},
+    {openarm::damiao_motor::RID::can_br, "can_br", "CAN baudrate", true},
     {openarm::damiao_motor::RID::sub_ver, "sub_ver", "Sub version", true},
-    {openarm::damiao_motor::RID::SN, "SN", "Serial number", true},
 
-    // Calibration offsets
+    // Calibration offsets (50-55)
     {openarm::damiao_motor::RID::u_off, "u_off", "U-phase offset", false},
     {openarm::damiao_motor::RID::v_off, "v_off", "V-phase offset", false},
     {openarm::damiao_motor::RID::m_off, "m_off", "Mechanical offset", false},
@@ -928,6 +937,11 @@ void OpenArm_v10DualModeHW::print_all_rid_values() {
               "RID value query complete!");
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
               "======================================");
+
+  // Reset callback mode back to IGNORE after parameter queries
+  openarm_->set_callback_mode_all(openarm::damiao_motor::CallbackMode::IGNORE);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  openarm_->recv_all();
 }
 
 }  // namespace openarm_hardware
