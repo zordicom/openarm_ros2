@@ -97,7 +97,6 @@ class OpenArm_v10HW : public hardware_interface::SystemInterface {
   bool parse_config(const hardware_interface::HardwareInfo& info);
   bool generate_joint_names();
   bool load_motor_config_from_yaml(const std::string& yaml_file);
-  void print_all_rid_values();
 
   ControllerConfig config_;
   std::string motor_config_file_;
