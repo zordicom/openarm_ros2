@@ -125,6 +125,9 @@ hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_configure(
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   openarm_->recv_all();
 
+  // Print all RID values at startup for debugging
+  print_all_rid_values();
+
   // Don't set control mode here - wait for interface claiming
   RCLCPP_INFO(
       rclcpp::get_logger("OpenArm_v10DualModeHW"),
@@ -766,6 +769,165 @@ bool OpenArm_v10DualModeHW::load_motor_config_from_yaml(
                  e.what());
     return false;
   }
+}
+
+void OpenArm_v10DualModeHW::print_all_rid_values() {
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+              "======================================");
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+              "Querying all RID values at startup...");
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+              "======================================");
+
+  // Define RID names and descriptions for better readability
+  struct RIDInfo {
+    openarm::damiao_motor::RID rid;
+    const char* name;
+    const char* description;
+    bool is_uint32;  // true if value should be interpreted as uint32, false for float
+  };
+
+  // List of important RIDs to query
+  std::vector<RIDInfo> rid_list = {
+    // Voltage and protection
+    {openarm::damiao_motor::RID::UV_Value, "UV_Value", "Undervoltage threshold (V)", false},
+    {openarm::damiao_motor::RID::OV_Value, "OV_Value", "Overvoltage threshold (V)", false},
+    {openarm::damiao_motor::RID::OT_Value, "OT_Value", "Overtemperature threshold (°C)", false},
+    {openarm::damiao_motor::RID::OC_Value, "OC_Value", "Overcurrent threshold (A)", false},
+
+    // Motor constants
+    {openarm::damiao_motor::RID::KT_Value, "KT_Value", "Motor torque constant (Nm/A)", false},
+    {openarm::damiao_motor::RID::NPP, "NPP", "Number of pole pairs", true},
+    {openarm::damiao_motor::RID::Rs, "Rs", "Stator resistance (Ohm)", false},
+    {openarm::damiao_motor::RID::LS, "LS", "Stator inductance (H)", false},
+    {openarm::damiao_motor::RID::Flux, "Flux", "Flux linkage (Wb)", false},
+    {openarm::damiao_motor::RID::Gr, "Gr", "Gear ratio", false},
+
+    // Motion limits
+    {openarm::damiao_motor::RID::ACC, "ACC", "Acceleration (rad/s²)", false},
+    {openarm::damiao_motor::RID::DEC, "DEC", "Deceleration (rad/s²)", false},
+    {openarm::damiao_motor::RID::MAX_SPD, "MAX_SPD", "Maximum speed (rad/s)", false},
+    {openarm::damiao_motor::RID::PMAX, "PMAX", "Max position (rad)", false},
+    {openarm::damiao_motor::RID::VMAX, "VMAX", "Max velocity (rad/s)", false},
+    {openarm::damiao_motor::RID::TMAX, "TMAX", "Max torque (Nm)", false},
+
+    // CAN IDs and communication
+    {openarm::damiao_motor::RID::MST_ID, "MST_ID", "Master CAN ID (recv ID)", true},
+    {openarm::damiao_motor::RID::ESC_ID, "ESC_ID", "ESC (motor) CAN ID", true},
+    {openarm::damiao_motor::RID::TIMEOUT, "TIMEOUT", "Communication timeout (ms)", true},
+    {openarm::damiao_motor::RID::can_br, "can_br", "CAN baudrate", true},
+
+    // Control mode and parameters
+    {openarm::damiao_motor::RID::CTRL_MODE, "CTRL_MODE", "Control mode (1=MIT, 2=PV)", true},
+    {openarm::damiao_motor::RID::Damp, "Damp", "Damping coefficient", false},
+    {openarm::damiao_motor::RID::Inertia, "Inertia", "Moment of inertia (kg·m²)", false},
+
+    // Control loop gains
+    {openarm::damiao_motor::RID::I_BW, "I_BW", "Current loop bandwidth (Hz)", false},
+    {openarm::damiao_motor::RID::V_BW, "V_BW", "Velocity loop bandwidth (Hz)", false},
+    {openarm::damiao_motor::RID::KP_ASR, "KP_ASR", "Speed loop Kp", false},
+    {openarm::damiao_motor::RID::KI_ASR, "KI_ASR", "Speed loop Ki", false},
+    {openarm::damiao_motor::RID::KP_APR, "KP_APR", "Position loop Kp", false},
+    {openarm::damiao_motor::RID::KI_APR, "KI_APR", "Position loop Ki", false},
+
+    // Version info
+    {openarm::damiao_motor::RID::hw_ver, "hw_ver", "Hardware version", true},
+    {openarm::damiao_motor::RID::sw_ver, "sw_ver", "Software version", true},
+    {openarm::damiao_motor::RID::sub_ver, "sub_ver", "Sub version", true},
+    {openarm::damiao_motor::RID::SN, "SN", "Serial number", true},
+
+    // Calibration offsets
+    {openarm::damiao_motor::RID::u_off, "u_off", "U-phase offset", false},
+    {openarm::damiao_motor::RID::v_off, "v_off", "V-phase offset", false},
+    {openarm::damiao_motor::RID::m_off, "m_off", "Mechanical offset", false},
+    {openarm::damiao_motor::RID::dir, "dir", "Motor direction", false},
+  };
+
+  // Get arm motors
+  const auto& arm_motors = openarm_->get_arm().get_motors();
+
+  // Query and print RID values for each arm motor
+  for (size_t motor_idx = 0; motor_idx < arm_motors.size(); ++motor_idx) {
+    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                "\n--- Motor %zu: %s (send_id: 0x%02X, recv_id: 0x%02X) ---",
+                motor_idx, config_.arm_joints[motor_idx].name.c_str(),
+                config_.arm_joints[motor_idx].send_can_id,
+                config_.arm_joints[motor_idx].recv_can_id);
+
+    // Query each RID
+    for (const auto& rid_info : rid_list) {
+      openarm_->query_param_all(static_cast<int>(rid_info.rid));
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      openarm_->recv_all();
+
+      // Get the value from the motor
+      double value = arm_motors[motor_idx].get_param(static_cast<int>(rid_info.rid));
+
+      // Format and print the value
+      if (value == -1) {
+        RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                    "  RID %3d (%s): <no response> - %s",
+                    static_cast<int>(rid_info.rid), rid_info.name, rid_info.description);
+      } else {
+        if (rid_info.is_uint32) {
+          RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                      "  RID %3d (%s): %u - %s",
+                      static_cast<int>(rid_info.rid), rid_info.name,
+                      static_cast<uint32_t>(value), rid_info.description);
+        } else {
+          RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                      "  RID %3d (%s): %.6f - %s",
+                      static_cast<int>(rid_info.rid), rid_info.name,
+                      value, rid_info.description);
+        }
+      }
+    }
+  }
+
+  // Query and print RID values for gripper if present
+  if (config_.gripper_joint.has_value()) {
+    const auto& gripper_motors = openarm_->get_gripper().get_motors();
+    if (!gripper_motors.empty()) {
+      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                  "\n--- Gripper Motor: %s (send_id: 0x%02X, recv_id: 0x%02X) ---",
+                  config_.gripper_joint.value().name.c_str(),
+                  config_.gripper_joint.value().send_can_id,
+                  config_.gripper_joint.value().recv_can_id);
+
+      for (const auto& rid_info : rid_list) {
+        openarm_->query_param_all(static_cast<int>(rid_info.rid));
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        openarm_->recv_all();
+
+        double value = gripper_motors[0].get_param(static_cast<int>(rid_info.rid));
+
+        if (value == -1) {
+          RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                      "  RID %3d (%s): <no response> - %s",
+                      static_cast<int>(rid_info.rid), rid_info.name, rid_info.description);
+        } else {
+          if (rid_info.is_uint32) {
+            RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                        "  RID %3d (%s): %u - %s",
+                        static_cast<int>(rid_info.rid), rid_info.name,
+                        static_cast<uint32_t>(value), rid_info.description);
+          } else {
+            RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+                        "  RID %3d (%s): %.6f - %s",
+                        static_cast<int>(rid_info.rid), rid_info.name,
+                        value, rid_info.description);
+          }
+        }
+      }
+    }
+  }
+
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+              "======================================");
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+              "RID value query complete!");
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
+              "======================================");
 }
 
 }  // namespace openarm_hardware
