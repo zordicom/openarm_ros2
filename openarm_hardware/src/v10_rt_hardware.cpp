@@ -280,10 +280,12 @@ hardware_interface::return_type OpenArm_v10RTHardware::read(
       tau_states_[i] = state->torques[i];
 
       // Check for motor errors (RT-safe)
-      if (state->error_codes[i] != 0) {
+      // Only the upper nibble (bits 4-7) indicates actual errors
+      // Lower nibble (bits 0-3) is status information
+      if ((state->error_codes[i] & 0xF0) != 0) {
         RCLCPP_ERROR_THROTTLE(rclcpp::get_logger("OpenArm_v10RTHardware"),
                               steady_clock, LOG_THROTTLE_MS,
-                              "Motor %zu error code: %u", i,
+                              "Motor %zu error code: 0x%02X", i,
                               state->error_codes[i]);
       }
     }
@@ -724,10 +726,10 @@ void OpenArm_v10RTHardware::can_worker_loop() {
   // Set thread name for debugging
   pthread_setname_np(pthread_self(), "openarm_can");
 
-  // Run at 400Hz to avoid CAN bus saturation
+  // Run at 500Hz for faster motor updates
   // Alternating pattern: send on even cycles, receive on odd cycles
-  // This gives 200Hz update rate for each direction
-  const auto cycle_time = std::chrono::microseconds(2500);  // 400Hz base rate
+  // This gives 250Hz update rate for each direction
+  const auto cycle_time = std::chrono::microseconds(2000);  // 500Hz base rate
 
   // Cycle counter for alternating pattern
   uint32_t cycle_counter = 0;
@@ -933,16 +935,18 @@ ControlMode OpenArm_v10RTHardware::determine_mode_from_interfaces(
   }
 
   // Determine mode based on interface combination
-  if (has_position && has_velocity && has_effort) {
-    // All interfaces claimed - MIT mode
+  // Effort (torque) interface claimed -> MIT mode for impedance control
+  if (has_effort) {
     return ControlMode::MIT;
-  } else if (has_position && has_velocity && !has_effort) {
-    // Position and velocity only - Position/Velocity mode
-    return ControlMode::POSITION_VELOCITY;
-  } else {
-    // Invalid combination
-    return ControlMode::UNINITIALIZED;
   }
+
+  // Position interface claimed without effort -> Position-Velocity mode
+  if (has_position && !has_effort) {
+    return ControlMode::POSITION_VELOCITY;
+  }
+
+  // Invalid or unclear combination
+  return ControlMode::UNINITIALIZED;
 }
 
 }  // namespace openarm_hardware
