@@ -15,6 +15,7 @@
 #include "openarm_hardware/v10_simple_hardware.hpp"
 #include "openarm_hardware/config_yaml.hpp"
 
+#include <openarm/damiao_motor/dm_motor_constants.hpp>
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
@@ -342,7 +343,7 @@ hardware_interface::return_type OpenArm_v10HW::read(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
   // Receive all motor states
   openarm_->refresh_all();
-  openarm_->recv_all();
+  openarm_->recv_all(2000);  // Wait up to 2ms for all motor responses to reduce stale data
 
   // Read arm joint states
   const auto& arm_motors = openarm_->get_arm().get_motors();
@@ -439,8 +440,23 @@ hardware_interface::return_type OpenArm_v10HW::write(
   std::vector<openarm::damiao_motor::MITParam> arm_params;
   for (size_t i = 0; i < config_.arm_joints.size(); ++i) {
     const MotorConfig& c = config_.arm_joints[i];
+
+    // Safety clamp torque commands to motor hardware limits
+    double tau_clamped = tau_commands_[i];
+    const auto& motor_limits = openarm::damiao_motor::MOTOR_LIMIT_PARAMS[static_cast<size_t>(c.type)];
+    double tau_limit = motor_limits.tMax;
+
+    if (std::abs(tau_clamped) > tau_limit) {
+      static rclcpp::Clock steady_clock(RCL_STEADY_TIME);
+      RCLCPP_WARN_THROTTLE(rclcpp::get_logger("OpenArm_v10HW"),
+                           steady_clock, 1000,
+                           "Joint %s torque command %.3f Nm exceeds motor limit %.1f Nm - clamping!",
+                           c.name.c_str(), tau_clamped, tau_limit);
+      tau_clamped = std::clamp(tau_clamped, -tau_limit, tau_limit);
+    }
+
     arm_params.push_back(
-        {c.kp, c.kd, pos_commands_[i], vel_commands_[i], tau_commands_[i]});
+        {c.kp, c.kd, pos_commands_[i], vel_commands_[i], tau_clamped});
   }
   openarm_->get_arm().mit_control_all(arm_params);
 

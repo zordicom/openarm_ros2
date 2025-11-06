@@ -31,7 +31,6 @@ struct MotorConfig {
   uint32_t recv_can_id;
   double kp;      // Used in MIT mode
   double kd;      // Used in MIT mode
-  double max_velocity;  // Max velocity for position mode (rad/s)
 };
 
 /**
@@ -48,7 +47,6 @@ struct GripperConfig {
   double open_position;
   double motor_closed_radians;
   double motor_open_radians;
-  double max_velocity;  // Max velocity for position mode
 };
 
 struct ControllerConfig {
@@ -58,9 +56,33 @@ struct ControllerConfig {
   // Use CAN FD instead of standard CAN.
   bool can_fd;
 
+  // Enable CSV logging of motor commands and states
+  bool enable_csv_logging = false;
+
   // Configuration storage using POD types
   std::vector<MotorConfig> arm_joints;
   std::optional<GripperConfig> gripper_joint;
+};
+
+/**
+ * @brief RT-specific hardware configuration
+ */
+struct HardwareConfig {
+  // CAN interface configuration
+  std::string can_interface = "can0";
+  int can_timeout_us = 500;  // microseconds
+
+  // RT thread configuration
+  int rt_priority = 0;  // 0 = don't set, 1-99 = RT priority
+  int worker_thread_priority = 0;  // Priority for worker thread
+  std::vector<int> cpu_affinity;  // CPU cores for worker thread
+
+  // Timing constraints
+  int max_cycle_time_us = 1000;  // Maximum cycle time in microseconds
+
+  // MIT mode parameters (default values)
+  double mit_kp = 5.0;
+  double mit_kd = 0.5;
 };
 
 double gripper_joint_to_motor_radians(const GripperConfig& config,
