@@ -22,6 +22,7 @@
 #include <cmath>
 #include <fstream>
 #include <sstream>
+#include <thread>
 
 #include <yaml-cpp/yaml.h>
 #include "rclcpp/logging.hpp"
@@ -127,8 +128,8 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_configure(
                 "Added gripper motor at index %d", gripper_idx);
   }
 
-  // Set initial control mode
-  current_mode_ = ControlMode::POSITION_VELOCITY;
+  // Set initial control mode to UNINITIALIZED until motors are enabled
+  current_mode_ = ControlMode::UNINITIALIZED;
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
               "Hardware interface configured successfully");
@@ -193,16 +194,40 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_activate(
     }
   }
 
-  // Enable motors (using RT-safe method even in non-RT context for consistency)
-  if (openarm_rt_->enable_all_motors_rt(1000) !=
-      openarm_rt_->get_motor_count()) {
-    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                 "Failed to enable all motors");
-    return CallbackReturn::ERROR;
-  }
+  // DEBUG: Enable motors and set control mode, then exit
+  RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "DEBUG MODE: Enabling motors and setting control mode only");
+
+  // Step 1: Enable motors (using RT-safe method even in non-RT context for consistency)
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "Step 1: Enabling %zu motors with base CAN IDs...", openarm_rt_->get_motor_count());
+
+  size_t enabled = openarm_rt_->enable_all_motors_rt(1000);
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "Enable command sent to %zu motors", enabled);
+
+  // Wait a bit for motors to respond
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  // Step 2: Set control mode
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "Step 2: Setting control mode to POSITION_VELOCITY (mode 2)...");
+
+  bool mode_set = openarm_rt_->set_mode_all_rt(
+      openarm::can::RTSafeOpenArm::ControlMode::POSITION_VELOCITY, 1000);
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
-              "Hardware interface activated successfully");
+              "Control mode command sent: %s", mode_set ? "SUCCESS" : "FAILED");
+
+  // Wait a bit for mode change to take effect
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  // Step 3: Exit for debugging
+  RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
+               "DEBUG MODE: Exiting after motor enable and mode set. Check CAN traffic!");
+
+  // Return ERROR to stop the system for debugging
+  return CallbackReturn::ERROR;
 
   return CallbackReturn::SUCCESS;
 }
@@ -708,7 +733,7 @@ void OpenArm_v10RTHardware::can_worker_loop() {
     if (send_cycle) {
       // SEND CYCLE: Read commands from RT thread and send to motors
       auto cmd = command_buffer_.readFromNonRT();
-      if (cmd && cmd->valid) {
+      if (cmd && cmd->valid && cmd->mode != ControlMode::UNINITIALIZED) {
         // Send commands to motors based on current mode
         if (cmd->mode == ControlMode::MIT) {
           // Pack MIT commands
