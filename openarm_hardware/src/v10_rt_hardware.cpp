@@ -890,9 +890,18 @@ bool OpenArm_v10RTHardware::switch_to_mit_mode() {
     command_buffer_.writeFromNonRT(invalid_cmd);
   }
 
-  // Send mode switch commands to motors using RT-safe method
-  return openarm_rt_->set_mode_all_rt(
-      openarm::can::RTSafeOpenArm::ControlMode::MIT, 1000);
+  // Write CTRL_MODE parameter to switch to MIT mode (value = 1)
+  size_t written = openarm_rt_->write_param_all_rt(
+      openarm::damiao_motor::RID::CTRL_MODE, 1, 1000);
+
+  if (written != openarm_rt_->get_motor_count()) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                 "Failed to switch all motors to MIT mode: %zu/%zu",
+                 written, openarm_rt_->get_motor_count());
+    return false;
+  }
+
+  return true;
 }
 
 bool OpenArm_v10RTHardware::switch_to_position_mode() {
@@ -916,9 +925,18 @@ bool OpenArm_v10RTHardware::switch_to_position_mode() {
     command_buffer_.writeFromNonRT(invalid_cmd);
   }
 
-  // Send mode switch commands to motors using RT-safe method
-  return openarm_rt_->set_mode_all_rt(
-      openarm::can::RTSafeOpenArm::ControlMode::POSITION_VELOCITY, 1000);
+  // Write CTRL_MODE parameter to switch to Position/Velocity mode (value = 2)
+  size_t written = openarm_rt_->write_param_all_rt(
+      openarm::damiao_motor::RID::CTRL_MODE, 2, 1000);
+
+  if (written != openarm_rt_->get_motor_count()) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                 "Failed to switch all motors to Position/Velocity mode: %zu/%zu",
+                 written, openarm_rt_->get_motor_count());
+    return false;
+  }
+
+  return true;
 }
 
 ControlMode OpenArm_v10RTHardware::determine_mode_from_interfaces(
