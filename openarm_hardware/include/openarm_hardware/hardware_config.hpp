@@ -31,7 +31,6 @@ struct MotorConfig {
   uint32_t recv_can_id;
   double kp;      // Used in MIT mode
   double kd;      // Used in MIT mode
-  double max_velocity;  // Max velocity for position mode (rad/s)
 };
 
 /**
@@ -48,7 +47,6 @@ struct GripperConfig {
   double open_position;
   double motor_closed_radians;
   double motor_open_radians;
-  double max_velocity;  // Max velocity for position mode
 };
 
 struct ControllerConfig {

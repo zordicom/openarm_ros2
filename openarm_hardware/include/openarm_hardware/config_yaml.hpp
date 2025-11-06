@@ -52,7 +52,6 @@ struct convert<openarm_hardware::MotorConfig> {
     config.recv_can_id = node["recv_can_id"].as<uint32_t>();
     config.kp = node["kp"].as<double>(0.0);
     config.kd = node["kd"].as<double>(0.0);
-    config.max_velocity = node["max_velocity"].as<double>(10.0);  // Default 10 rad/s
     return true;
   }
 };
@@ -70,7 +69,6 @@ struct convert<openarm_hardware::GripperConfig> {
     config.open_position = node["open_position"].as<double>();
     config.motor_closed_radians = node["motor_closed_radians"].as<double>();
     config.motor_open_radians = node["motor_open_radians"].as<double>();
-    config.max_velocity = node["max_velocity"].as<double>(5.0);  // Default 5 rad/s
     return true;
   }
 };

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include "openarm_hardware/v10_dual_mode_hardware.hpp"
-#include "openarm_hardware/config_yaml.hpp"
 
 #include <linux/can.h>
 #include <linux/can/raw.h>
@@ -29,6 +28,7 @@
 #include <thread>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
+#include "openarm_hardware/config_yaml.hpp"
 
 namespace openarm_hardware {
 
@@ -213,11 +213,13 @@ OpenArm_v10DualModeHW::prepare_command_mode_switch(
   pending_mode_ = new_mode;
 
   if (pending_mode_ != current_mode_) {
-    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                "Mode switch prepared: %s -> %s",
-                current_mode_ == ControlMode::MIT ? "MIT" :
-                current_mode_ == ControlMode::POSITION_VELOCITY ? "POSITION_VELOCITY" : "UNINITIALIZED",
-                pending_mode_ == ControlMode::MIT ? "MIT" : "POSITION_VELOCITY");
+    RCLCPP_INFO(
+        rclcpp::get_logger("OpenArm_v10DualModeHW"),
+        "Mode switch prepared: %s -> %s",
+        current_mode_ == ControlMode::MIT                 ? "MIT"
+        : current_mode_ == ControlMode::POSITION_VELOCITY ? "POSITION_VELOCITY"
+                                                          : "UNINITIALIZED",
+        pending_mode_ == ControlMode::MIT ? "MIT" : "POSITION_VELOCITY");
   }
 
   return hardware_interface::return_type::OK;
@@ -330,8 +332,8 @@ bool OpenArm_v10DualModeHW::switch_to_mit_mode() {
     pre_switch_tau[i] = arm_motors[i].get_torque();
 
     RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                "  Joint %zu: pos=%.4f rad, vel=%.4f rad/s, tau=%.4f Nm",
-                i, pre_switch_pos[i], pre_switch_vel[i], pre_switch_tau[i]);
+                "  Joint %zu: pos=%.4f rad, vel=%.4f rad/s, tau=%.4f Nm", i,
+                pre_switch_pos[i], pre_switch_vel[i], pre_switch_tau[i]);
   }
 
   // Step 2: Seed command buffers with current state
@@ -356,17 +358,21 @@ bool OpenArm_v10DualModeHW::switch_to_mit_mode() {
               "Step 2: Command buffers seeded with current state");
 
   // Step 3: Send MIT command BEFORE changing mode (while still in POS_VEL mode)
-  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-              "Step 3: Sending MIT command (while still in Position-Velocity mode):");
+  RCLCPP_INFO(
+      rclcpp::get_logger("OpenArm_v10DualModeHW"),
+      "Step 3: Sending MIT command (while still in Position-Velocity mode):");
 
   std::vector<openarm::damiao_motor::MITParam> arm_params;
   for (size_t i = 0; i < config_.arm_joints.size(); ++i) {
     const MotorConfig& c = config_.arm_joints[i];
-    arm_params.push_back({c.kp, c.kd, pos_commands_[i], vel_commands_[i], tau_commands_[i]});
+    arm_params.push_back(
+        {c.kp, c.kd, pos_commands_[i], vel_commands_[i], tau_commands_[i]});
 
     RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                "  Joint %zu MIT params: kp=%.1f, kd=%.1f, pos=%.4f, vel=%.4f, tau=%.4f",
-                i, c.kp, c.kd, pos_commands_[i], vel_commands_[i], tau_commands_[i]);
+                "  Joint %zu MIT params: kp=%.1f, kd=%.1f, pos=%.4f, vel=%.4f, "
+                "tau=%.4f",
+                i, c.kp, c.kd, pos_commands_[i], vel_commands_[i],
+                tau_commands_[i]);
   }
 
   openarm_->get_arm().mit_control_all(arm_params);
@@ -410,15 +416,19 @@ bool OpenArm_v10DualModeHW::switch_to_mit_mode() {
     double pos_delta = std::abs(post_pos - pre_switch_pos[i]);
     double tau_delta = std::abs(post_tau - pre_switch_tau[i]);
 
-    const char* status = (pos_delta < pos_threshold && tau_delta < tau_threshold) ? "OK" : "WARN";
+    const char* status =
+        (pos_delta < pos_threshold && tau_delta < tau_threshold) ? "OK"
+                                                                 : "WARN";
 
-    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                "  Joint %zu [%s]: pos=%.4f (Δ=%.4f), vel=%.4f, tau=%.4f (Δ=%.4f)",
-                i, status, post_pos, pos_delta, post_vel, post_tau, tau_delta);
+    RCLCPP_INFO(
+        rclcpp::get_logger("OpenArm_v10DualModeHW"),
+        "  Joint %zu [%s]: pos=%.4f (Δ=%.4f), vel=%.4f, tau=%.4f (Δ=%.4f)", i,
+        status, post_pos, pos_delta, post_vel, post_tau, tau_delta);
 
     if (pos_delta >= pos_threshold || tau_delta >= tau_threshold) {
       RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                  "  Joint %zu exceeded threshold! pos_delta=%.4f (thresh=%.4f), tau_delta=%.4f (thresh=%.4f)",
+                  "  Joint %zu exceeded threshold! pos_delta=%.4f "
+                  "(thresh=%.4f), tau_delta=%.4f (thresh=%.4f)",
                   i, pos_delta, pos_threshold, tau_delta, tau_threshold);
       transition_ok = false;
     }
@@ -428,18 +438,23 @@ bool OpenArm_v10DualModeHW::switch_to_mit_mode() {
     RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
                 "=== Transition to MIT mode completed successfully ===");
   } else {
-    RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                "=== Transition to MIT mode completed with deviations (see above) ===");
+    RCLCPP_WARN(
+        rclcpp::get_logger("OpenArm_v10DualModeHW"),
+        "=== Transition to MIT mode completed with deviations (see above) ===");
   }
 
   return true;
 }
 
 void OpenArm_v10DualModeHW::log_mode_switch(ControlMode from, ControlMode to) {
-  const char* from_str = from == ControlMode::MIT ? "MIT" :
-                         from == ControlMode::POSITION_VELOCITY ? "POSITION_VELOCITY" : "UNINITIALIZED";
-  const char* to_str = to == ControlMode::MIT ? "MIT" :
-                       to == ControlMode::POSITION_VELOCITY ? "POSITION_VELOCITY" : "UNINITIALIZED";
+  const char* from_str = from == ControlMode::MIT ? "MIT"
+                         : from == ControlMode::POSITION_VELOCITY
+                             ? "POSITION_VELOCITY"
+                             : "UNINITIALIZED";
+  const char* to_str = to == ControlMode::MIT ? "MIT"
+                       : to == ControlMode::POSITION_VELOCITY
+                           ? "POSITION_VELOCITY"
+                           : "UNINITIALIZED";
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
               "Mode switched: %s -> %s", from_str, to_str);
@@ -483,12 +498,13 @@ hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_activate(
                 "Enabling CSV logging to USER_WS/openarm_can_logs");
     openarm_->get_arm().enable_csv_logging("", "openarm_hardware");
 
-    // Initialize command log with current motor states so CSV logging has data from the start
+    // Initialize command log with current motor states so CSV logging has data
+    // from the start
     for (size_t i = 0; i < arm_motors.size(); ++i) {
       const auto& motor_config = config_.arm_joints[i];
-      openarm_->get_arm().init_command_log(
-          i, "REFRESH", motor_config.kp, motor_config.kd,
-          pos_commands_[i], vel_commands_[i], tau_commands_[i]);
+      openarm_->get_arm().init_command_log(i, "REFRESH", motor_config.kp,
+                                           motor_config.kd, pos_commands_[i],
+                                           vel_commands_[i], tau_commands_[i]);
     }
   }
 
@@ -526,7 +542,8 @@ hardware_interface::return_type OpenArm_v10DualModeHW::read(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
   // Request fresh motor states
   openarm_->refresh_all();
-  openarm_->recv_all(2000);  // Wait up to 2ms for all motor responses to reduce stale data
+  openarm_->recv_all(
+      2000);  // Wait up to 2ms for all motor responses to reduce stale data
 
   // Read arm motor states
   const auto& arm_motors = openarm_->get_arm().get_motors();
@@ -598,8 +615,8 @@ hardware_interface::return_type OpenArm_v10DualModeHW::write(
   openarm_->recv_all(1000);
 
   // Perform delayed mode switch after final command in current mode
-  if (pending_mode_ != current_mode_ && pending_mode_ != ControlMode::UNINITIALIZED) {
-
+  if (pending_mode_ != current_mode_ &&
+      pending_mode_ != ControlMode::UNINITIALIZED) {
     bool switch_success = false;
     switch (pending_mode_) {
       case ControlMode::POSITION_VELOCITY:
@@ -630,7 +647,6 @@ bool OpenArm_v10DualModeHW::send_position_commands() {
   std::vector<openarm::damiao_motor::PosVelParam> arm_params;
 
   for (size_t i = 0; i < config_.arm_joints.size(); ++i) {
-    const auto& motor = config_.arm_joints[i];
     double position = pos_commands_[i];
 
     // Use velocity command if velocity interface is claimed, otherwise use
@@ -638,13 +654,9 @@ bool OpenArm_v10DualModeHW::send_position_commands() {
     double velocity;
     if (velocity_interface_claimed_) {
       velocity = vel_commands_[i];
-      // Limit velocity to max configured velocity
-      if (std::abs(velocity) > motor.max_velocity) {
-        velocity = std::copysign(motor.max_velocity, velocity);
-      }
     } else {
-      // Default to max velocity when only position interface is claimed
-      velocity = motor.max_velocity;
+      // Default velocity when only position interface is claimed
+      velocity = 10.0;
     }
 
     arm_params.push_back({position, velocity});
@@ -661,16 +673,13 @@ bool OpenArm_v10DualModeHW::send_position_commands() {
         gripper_joint_to_motor_radians(gripper, pos_commands_[idx]);
 
     // Use velocity command if velocity interface is claimed, otherwise use
-    // max_velocity
+    // default
     double motor_velocity;
     if (velocity_interface_claimed_) {
       motor_velocity = vel_commands_[idx];
-      if (std::abs(motor_velocity) > gripper.max_velocity) {
-        motor_velocity = std::copysign(gripper.max_velocity, motor_velocity);
-      }
     } else {
-      // Default to max velocity when only position interface is claimed
-      motor_velocity = gripper.max_velocity;
+      // Default velocity when only position interface is claimed
+      motor_velocity = 5.0;
     }
 
     openarm_->get_gripper().pos_vel_control_all(

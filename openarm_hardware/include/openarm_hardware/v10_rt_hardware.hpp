@@ -98,6 +98,8 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
   std::string motor_config_file_;
   std::vector<std::string> joint_names_;
   size_t num_joints_{0};
+  std::vector<MotorConfig> motor_configs_;  // Motor configurations from YAML
+  std::optional<GripperConfig> gripper_config_;  // Optional gripper configuration
 
   // Pre-allocated state and command buffers
   std::array<double, MAX_JOINTS> pos_states_{};
