@@ -884,7 +884,10 @@ bool OpenArm_v10RTHardware::switch_to_mit_mode() {
       return false;
     }
 
-    // No delay needed - motors will respond with feedback
+    // Clear command buffer - mark as invalid so we don't send garbage
+    CommandData invalid_cmd;
+    invalid_cmd.valid = false;
+    command_buffer_.writeFromNonRT(invalid_cmd);
   }
 
   // Send mode switch commands to motors using RT-safe method
@@ -907,7 +910,10 @@ bool OpenArm_v10RTHardware::switch_to_position_mode() {
       return false;
     }
 
-    // No delay needed - motors will respond with feedback
+    // Clear command buffer - mark as invalid so we don't send garbage
+    CommandData invalid_cmd;
+    invalid_cmd.valid = false;
+    command_buffer_.writeFromNonRT(invalid_cmd);
   }
 
   // Send mode switch commands to motors using RT-safe method
