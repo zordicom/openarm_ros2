@@ -201,10 +201,6 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_activate(
     return CallbackReturn::ERROR;
   }
 
-  // Initialize timing
-  last_read_time_ = std::chrono::steady_clock::now();
-  last_write_time_ = std::chrono::steady_clock::now();
-
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
               "Hardware interface activated successfully");
 
@@ -264,6 +260,9 @@ OpenArm_v10RTHardware::export_command_interfaces() {
 
 hardware_interface::return_type OpenArm_v10RTHardware::read(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
+  // Measure actual function execution time
+  auto function_start = std::chrono::steady_clock::now();
+
   // This is called from RT context - just copy from the realtime buffer
   auto state = state_buffer_.readFromRT();
 
@@ -283,26 +282,28 @@ hardware_interface::return_type OpenArm_v10RTHardware::read(
     }
   }
 
-  // Monitor timing (RT-safe)
-  auto now = std::chrono::steady_clock::now();
+  // Monitor actual function execution time (RT-safe)
+  auto function_end = std::chrono::steady_clock::now();
   auto read_duration = std::chrono::duration_cast<std::chrono::microseconds>(
-                           now - last_read_time_)
+                           function_end - function_start)
                            .count();
 
-  if (read_duration > config_.max_cycle_time_us) {
+  // Only warn if the actual function takes too long (should be < 100us typically)
+  if (read_duration > 100) {
     RCLCPP_WARN_THROTTLE(rclcpp::get_logger("OpenArm_v10RTHardware"),
                          steady_clock, LOG_THROTTLE_MS,
-                         "Read cycle time exceeded: %ld us > %d us",
-                         read_duration, config_.max_cycle_time_us);
+                         "Read function execution time: %ld us (expected < 100 us)",
+                         read_duration);
   }
-
-  last_read_time_ = now;
 
   return hardware_interface::return_type::OK;
 }
 
 hardware_interface::return_type OpenArm_v10RTHardware::write(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
+  // Measure actual function execution time
+  auto function_start = std::chrono::steady_clock::now();
+
   // This is called from RT context - just write to the realtime buffer
   CommandData cmd;
   cmd.mode = current_mode_.load();
@@ -316,20 +317,19 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
 
   command_buffer_.writeFromNonRT(cmd);
 
-  // Monitor timing (RT-safe)
-  auto now = std::chrono::steady_clock::now();
+  // Monitor actual function execution time (RT-safe)
+  auto function_end = std::chrono::steady_clock::now();
   auto write_duration = std::chrono::duration_cast<std::chrono::microseconds>(
-                            now - last_write_time_)
+                            function_end - function_start)
                             .count();
 
-  if (write_duration > config_.max_cycle_time_us) {
+  // Only warn if the actual function takes too long (should be < 100us typically)
+  if (write_duration > 100) {
     RCLCPP_WARN_THROTTLE(rclcpp::get_logger("OpenArm_v10RTHardware"),
                          steady_clock, LOG_THROTTLE_MS,
-                         "Write cycle time exceeded: %ld us > %d us",
-                         write_duration, config_.max_cycle_time_us);
+                         "Write function execution time: %ld us (expected < 100 us)",
+                         write_duration);
   }
-
-  last_write_time_ = now;
 
   return hardware_interface::return_type::OK;
 }

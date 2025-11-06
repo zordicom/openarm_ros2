@@ -153,10 +153,6 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
   std::thread can_worker_thread_;
   std::atomic<bool> worker_running_{false};
 
-  // Timing for RT monitoring
-  std::chrono::steady_clock::time_point last_read_time_;
-  std::chrono::steady_clock::time_point last_write_time_;
-
   // RT-safe logging (using throttled macros)
   static constexpr int LOG_THROTTLE_MS = 1000;  // Log at most once per second
 
