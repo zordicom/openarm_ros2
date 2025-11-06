@@ -203,13 +203,14 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_activate(
   size_t enabled = openarm_rt_->enable_all_motors_rt(1000);
   if (enabled != openarm_rt_->get_motor_count()) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                 "Failed to enable all motors: %zu/%zu",
-                 enabled, openarm_rt_->get_motor_count());
+                 "Failed to enable all motors: %zu/%zu", enabled,
+                 openarm_rt_->get_motor_count());
     return CallbackReturn::ERROR;
   }
 
-  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
-              "Hardware interface activated successfully. Motors enabled and ready.");
+  RCLCPP_INFO(
+      rclcpp::get_logger("OpenArm_v10RTHardware"),
+      "Hardware interface activated successfully. Motors enabled and ready.");
 
   return CallbackReturn::SUCCESS;
 }
@@ -352,7 +353,8 @@ OpenArm_v10RTHardware::prepare_command_mode_switch(
     const std::vector<std::string>& start_interfaces,
     const std::vector<std::string>& stop_interfaces) {
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
-              "prepare_command_mode_switch called with %zu start interfaces and %zu stop interfaces",
+              "prepare_command_mode_switch called with %zu start interfaces "
+              "and %zu stop interfaces",
               start_interfaces.size(), stop_interfaces.size());
 
   // Log the interfaces being started
@@ -726,10 +728,9 @@ void OpenArm_v10RTHardware::can_worker_loop() {
   // Set thread name for debugging
   pthread_setname_np(pthread_self(), "openarm_can");
 
-  // Run at 500Hz for faster motor updates
   // Alternating pattern: send on even cycles, receive on odd cycles
-  // This gives 250Hz update rate for each direction
-  const auto cycle_time = std::chrono::microseconds(2000);  // 500Hz base rate
+  // This gives cycle_time / 2 (tx + rx direction)
+  const auto cycle_time = std::chrono::microseconds(1600);  // 600Hz base rate
 
   // Cycle counter for alternating pattern
   uint32_t cycle_counter = 0;
@@ -879,8 +880,8 @@ bool OpenArm_v10RTHardware::switch_to_mit_mode() {
     size_t enabled = openarm_rt_->enable_all_motors_rt(1000);
     if (enabled != openarm_rt_->get_motor_count()) {
       RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                   "Failed to enable all motors: %zu/%zu",
-                   enabled, openarm_rt_->get_motor_count());
+                   "Failed to enable all motors: %zu/%zu", enabled,
+                   openarm_rt_->get_motor_count());
       return false;
     }
 
@@ -890,14 +891,26 @@ bool OpenArm_v10RTHardware::switch_to_mit_mode() {
     command_buffer_.writeFromNonRT(invalid_cmd);
   }
 
+  // Initialize command interfaces with current motor states to avoid jumps
+  // This ensures the first MIT command sent will match current state
+  for (size_t i = 0; i < num_joints_; ++i) {
+    pos_commands_[i] = pos_states_[i];
+    vel_commands_[i] = vel_states_[i];
+    tau_commands_[i] = tau_states_[i];
+  }
+
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "Seeded command interfaces with current motor states for smooth "
+              "transition");
+
   // Write CTRL_MODE parameter to switch to MIT mode (value = 1)
   size_t written = openarm_rt_->write_param_all_rt(
       openarm::damiao_motor::RID::CTRL_MODE, 1, 1000);
 
   if (written != openarm_rt_->get_motor_count()) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                 "Failed to switch all motors to MIT mode: %zu/%zu",
-                 written, openarm_rt_->get_motor_count());
+                 "Failed to switch all motors to MIT mode: %zu/%zu", written,
+                 openarm_rt_->get_motor_count());
     return false;
   }
 
@@ -914,8 +927,8 @@ bool OpenArm_v10RTHardware::switch_to_position_mode() {
     size_t enabled = openarm_rt_->enable_all_motors_rt(1000);
     if (enabled != openarm_rt_->get_motor_count()) {
       RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                   "Failed to enable all motors: %zu/%zu",
-                   enabled, openarm_rt_->get_motor_count());
+                   "Failed to enable all motors: %zu/%zu", enabled,
+                   openarm_rt_->get_motor_count());
       return false;
     }
 
@@ -925,14 +938,28 @@ bool OpenArm_v10RTHardware::switch_to_position_mode() {
     command_buffer_.writeFromNonRT(invalid_cmd);
   }
 
+  // Initialize command interfaces with current motor states to avoid jumps
+  // This ensures the first Position/Velocity command sent will match current
+  // state
+  for (size_t i = 0; i < num_joints_; ++i) {
+    pos_commands_[i] = pos_states_[i];
+    vel_commands_[i] = vel_states_[i];
+    tau_commands_[i] = tau_states_[i];
+  }
+
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "Seeded command interfaces with current motor states for smooth "
+              "transition");
+
   // Write CTRL_MODE parameter to switch to Position/Velocity mode (value = 2)
   size_t written = openarm_rt_->write_param_all_rt(
       openarm::damiao_motor::RID::CTRL_MODE, 2, 1000);
 
   if (written != openarm_rt_->get_motor_count()) {
-    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                 "Failed to switch all motors to Position/Velocity mode: %zu/%zu",
-                 written, openarm_rt_->get_motor_count());
+    RCLCPP_ERROR(
+        rclcpp::get_logger("OpenArm_v10RTHardware"),
+        "Failed to switch all motors to Position/Velocity mode: %zu/%zu",
+        written, openarm_rt_->get_motor_count());
     return false;
   }
 
