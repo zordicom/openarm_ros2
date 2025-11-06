@@ -37,15 +37,29 @@
 namespace openarm_hardware {
 
 /**
- * @brief Simplified OpenArm V10 Hardware Interface
- *
- * This is a simplified version that uses the OpenArm CAN API directly,
- * following the pattern from full_arm.cpp example. Much simpler than
- * the original implementation.
+ * @brief Control mode for motors
+ * Based on DM motor control modes
  */
-class OpenArm_v10HW : public hardware_interface::SystemInterface {
+enum class ControlMode {
+  UNINITIALIZED = -1,
+  MIT = 1,            // MIT mode (torque/impedance control)
+  POSITION_VELOCITY = 2,  // Position-Velocity mode (0x100 + ID frame)
+  VELOCITY = 3,       // Velocity mode (not implemented)
+  TORQUE_POSITION = 4 // Torque-Position mode (not implemented)
+};
+
+/**
+ * @brief Dual-mode OpenArm V10 Hardware Interface
+ *
+ * This hardware interface supports two control modes:
+ * 1. Position Mode: When position interface is claimed (joint_trajectory_controller)
+ * 2. MIT Mode: When effort interface is claimed (impedance controllers)
+ *
+ * The mode is automatically selected based on which command interfaces are claimed.
+ */
+class OpenArm_v10DualModeHW : public hardware_interface::SystemInterface {
  public:
-  OpenArm_v10HW();
+  OpenArm_v10DualModeHW();
 
   TEMPLATES__ROS2_CONTROL__VISIBILITY_PUBLIC
   hardware_interface::CallbackReturn on_init(
@@ -79,9 +93,28 @@ class OpenArm_v10HW : public hardware_interface::SystemInterface {
   hardware_interface::return_type write(
       const rclcpp::Time& time, const rclcpp::Duration& period) override;
 
+  TEMPLATES__ROS2_CONTROL__VISIBILITY_PUBLIC
+  hardware_interface::return_type prepare_command_mode_switch(
+      const std::vector<std::string>& start_interfaces,
+      const std::vector<std::string>& stop_interfaces) override;
+
+  TEMPLATES__ROS2_CONTROL__VISIBILITY_PUBLIC
+  hardware_interface::return_type perform_command_mode_switch(
+      const std::vector<std::string>& start_interfaces,
+      const std::vector<std::string>& stop_interfaces) override;
+
  private:
   // OpenArm instance
   std::unique_ptr<openarm::can::socket::OpenArm> openarm_;
+
+  // Control mode state
+  ControlMode current_mode_ = ControlMode::UNINITIALIZED;
+  ControlMode pending_mode_ = ControlMode::UNINITIALIZED;
+
+  // Track which interfaces are claimed
+  bool position_interface_claimed_ = false;
+  bool velocity_interface_claimed_ = false;
+  bool effort_interface_claimed_ = false;
 
   // ROS2 control joint names, state, and command vectors.
   std::vector<std::string> joint_names_;
@@ -98,8 +131,23 @@ class OpenArm_v10HW : public hardware_interface::SystemInterface {
   bool generate_joint_names();
   bool load_motor_config_from_yaml(const std::string& yaml_file);
 
+  // Mode switching helpers
+  bool switch_to_position_mode();
+  bool switch_to_mit_mode();
+  ControlMode determine_mode_from_interfaces(
+      const std::vector<std::string>& interfaces);
+
+  // Position mode control
+  bool send_position_commands();
+
+  // MIT mode control
+  bool send_mit_commands();
+
   ControllerConfig config_;
   std::string motor_config_file_;
+
+  // Logging helpers
+  void log_mode_switch(ControlMode from, ControlMode to);
 };
 
 }  // namespace openarm_hardware
