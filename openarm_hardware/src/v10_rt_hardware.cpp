@@ -319,12 +319,18 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
   // This is called from RT context - just write to the realtime buffer
   CommandData cmd;
   cmd.mode = current_mode_.load();
-  cmd.valid = true;
 
-  for (size_t i = 0; i < num_joints_; ++i) {
-    cmd.positions[i] = pos_commands_[i];
-    cmd.velocities[i] = vel_commands_[i];
-    cmd.torques[i] = tau_commands_[i];
+  // If a mode switch is pending, don't send commands until it completes
+  // This prevents sending stale commands in the wrong mode
+  if (mode_switch_requested_.load()) {
+    cmd.valid = false;
+  } else {
+    cmd.valid = true;
+    for (size_t i = 0; i < num_joints_; ++i) {
+      cmd.positions[i] = pos_commands_[i];
+      cmd.velocities[i] = vel_commands_[i];
+      cmd.torques[i] = tau_commands_[i];
+    }
   }
 
   command_buffer_.writeFromNonRT(cmd);
