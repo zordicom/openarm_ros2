@@ -75,4 +75,7 @@ struct ControllerConfig {
   std::optional<GripperConfig> gripper_joint;
 };
 
+// Convert motor error code to string.
+std::string error_code_to_string(uint8_t error_code);
+
 }  // namespace openarm_hardware
