@@ -685,67 +685,79 @@ void OpenArm_v10RTHardware::can_worker_loop() {
   // Set thread name for debugging
   pthread_setname_np(pthread_self(), "openarm_can");
 
-  const auto cycle_time = std::chrono::microseconds(1000);  // 1kHz
+  // Run at 400Hz to avoid CAN bus saturation
+  // Alternating pattern: send on even cycles, receive on odd cycles
+  // This gives 200Hz update rate for each direction
+  const auto cycle_time = std::chrono::microseconds(2500);  // 400Hz base rate
+
+  // Cycle counter for alternating pattern
+  uint32_t cycle_counter = 0;
 
   while (worker_running_) {
     auto cycle_start = std::chrono::steady_clock::now();
+
+    // Alternate between sending and receiving to reduce CAN bus load
+    bool send_cycle = (cycle_counter % 2 == 0);
+    cycle_counter++;
 
     // Check for pending mode switch
     if (mode_switch_requested_.exchange(false)) {
       perform_mode_switch_async();
     }
 
-    // Read commands from RT thread
-    auto cmd = command_buffer_.readFromNonRT();
-    if (cmd && cmd->valid) {
-      // Send commands to motors based on current mode
-      if (cmd->mode == ControlMode::MIT) {
-        // Pack MIT commands
-        for (size_t i = 0; i < num_joints_; ++i) {
-          mit_params_[i].q = cmd->positions[i];
-          mit_params_[i].dq = cmd->velocities[i];
-          mit_params_[i].tau = cmd->torques[i];
-          mit_params_[i].kp = config_.mit_kp;
-          mit_params_[i].kd = config_.mit_kd;
-        }
-        // Send MIT commands (batch) using RT-safe method
-        openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_,
-                                       config_.can_timeout_us);
+    if (send_cycle) {
+      // SEND CYCLE: Read commands from RT thread and send to motors
+      auto cmd = command_buffer_.readFromNonRT();
+      if (cmd && cmd->valid) {
+        // Send commands to motors based on current mode
+        if (cmd->mode == ControlMode::MIT) {
+          // Pack MIT commands
+          for (size_t i = 0; i < num_joints_; ++i) {
+            mit_params_[i].q = cmd->positions[i];
+            mit_params_[i].dq = cmd->velocities[i];
+            mit_params_[i].tau = cmd->torques[i];
+            mit_params_[i].kp = config_.mit_kp;
+            mit_params_[i].kd = config_.mit_kd;
+          }
+          // Send MIT commands (batch) using RT-safe method
+          openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_,
+                                         config_.can_timeout_us);
 
-      } else if (cmd->mode == ControlMode::POSITION_VELOCITY) {
-        // Pack position/velocity commands
-        for (size_t i = 0; i < num_joints_; ++i) {
-          posvel_params_[i].position = cmd->positions[i];
-          posvel_params_[i].velocity = cmd->velocities[i];
-        }
-        // Send position/velocity commands (batch) using RT-safe method
-        openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
-                                          config_.can_timeout_us);
-      }
-    }
-
-    // Read states from motors
-    StateData new_state;
-    new_state.valid = false;
-
-    // Receive motor states (batch) using RT-safe method
-    std::array<openarm::damiao_motor::StateResult, MAX_JOINTS> motor_states;
-    size_t received = openarm_rt_->receive_states_batch_rt(
-        motor_states.data(), num_joints_, config_.can_timeout_us);
-
-    if (received > 0) {
-      for (size_t i = 0; i < num_joints_; ++i) {
-        if (motor_states[i].valid) {
-          new_state.positions[i] = motor_states[i].position;
-          new_state.velocities[i] = motor_states[i].velocity;
-          new_state.torques[i] = motor_states[i].torque;
-          new_state.error_codes[i] = motor_states[i].error_code;
+        } else if (cmd->mode == ControlMode::POSITION_VELOCITY) {
+          // Pack position/velocity commands
+          for (size_t i = 0; i < num_joints_; ++i) {
+            posvel_params_[i].position = cmd->positions[i];
+            posvel_params_[i].velocity = cmd->velocities[i];
+          }
+          // Send position/velocity commands (batch) using RT-safe method
+          openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
+                                            config_.can_timeout_us);
         }
       }
-      new_state.valid = true;
+    } else {
+      // RECEIVE CYCLE: Read states from motors
+      StateData new_state;
+      new_state.valid = false;
 
-      // Write to RT buffer
-      state_buffer_.writeFromNonRT(new_state);
+      // Receive motor states (batch) using RT-safe method
+      std::array<openarm::damiao_motor::StateResult, MAX_JOINTS> motor_states;
+      size_t received = openarm_rt_->receive_states_batch_rt(
+          motor_states.data(), num_joints_, config_.can_timeout_us);
+
+      if (received > 0) {
+        for (size_t i = 0; i < num_joints_; ++i) {
+          if (motor_states[i].valid) {
+            new_state.positions[i] = motor_states[i].position;
+            new_state.velocities[i] = motor_states[i].velocity;
+            new_state.torques[i] = motor_states[i].torque;
+            new_state.error_codes[i] = motor_states[i].error_code;
+          }
+        }
+        new_state.valid = true;
+
+        // Write to RT buffer
+        state_buffer_.writeFromNonRT(new_state);
+      }
     }
 
     // Sleep to maintain cycle time
@@ -757,9 +769,14 @@ void OpenArm_v10RTHardware::can_worker_loop() {
     } else {
       // Log if we're missing cycles (non-RT thread, so logging is OK)
       static int missed_cycles = 0;
-      if (++missed_cycles % 1000 == 0) {  // Log every 1000 missed cycles
+      missed_cycles++;
+
+      // Log every 1000 missed cycles with more detail
+      if (missed_cycles % 1000 == 0) {
+        auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(cycle_duration).count();
         RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                    "CAN worker thread missed %d cycles", missed_cycles);
+                    "CAN worker thread missed %d cycles. Last cycle took %ld us (target: 2500 us). %s cycle.",
+                    missed_cycles, duration_us, send_cycle ? "Send" : "Receive");
       }
     }
   }
