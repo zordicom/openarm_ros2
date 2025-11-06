@@ -16,6 +16,7 @@
 
 #include <pthread.h>
 #include <sched.h>
+#include <yaml-cpp/yaml.h>
 
 #include <algorithm>
 #include <chrono>
@@ -24,7 +25,6 @@
 #include <sstream>
 #include <thread>
 
-#include <yaml-cpp/yaml.h>
 #include "rclcpp/logging.hpp"
 #include "realtime_tools/realtime_helpers.hpp"
 
@@ -104,10 +104,12 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_configure(
 
   // Add motors to RT-safe wrapper based on configuration
   for (const auto& motor : motor_configs_) {
-    int motor_idx = openarm_rt_->add_motor(motor.type, motor.send_can_id, motor.recv_can_id);
+    int motor_idx = openarm_rt_->add_motor(motor.type, motor.send_can_id,
+                                           motor.recv_can_id);
     if (motor_idx < 0) {
       RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                   "Failed to add motor '%s' to RT-safe wrapper", motor.name.c_str());
+                   "Failed to add motor '%s' to RT-safe wrapper",
+                   motor.name.c_str());
       return CallbackReturn::ERROR;
     }
     RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
@@ -194,40 +196,9 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_activate(
     }
   }
 
-  // DEBUG: Enable motors and set control mode, then exit
-  RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHardware"),
-              "DEBUG MODE: Enabling motors and setting control mode only");
-
-  // Step 1: Enable motors (using RT-safe method even in non-RT context for consistency)
+  // Don't enable motors or set modes here - wait for interface claiming
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
-              "Step 1: Enabling %zu motors with base CAN IDs...", openarm_rt_->get_motor_count());
-
-  size_t enabled = openarm_rt_->enable_all_motors_rt(1000);
-  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
-              "Enable command sent to %zu motors", enabled);
-
-  // Wait a bit for motors to respond
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-  // Step 2: Set control mode
-  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
-              "Step 2: Setting control mode to POSITION_VELOCITY (mode 2)...");
-
-  bool mode_set = openarm_rt_->set_mode_all_rt(
-      openarm::can::RTSafeOpenArm::ControlMode::POSITION_VELOCITY, 1000);
-
-  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
-              "Control mode command sent: %s", mode_set ? "SUCCESS" : "FAILED");
-
-  // Wait a bit for mode change to take effect
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-  // Step 3: Exit for debugging
-  RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-               "DEBUG MODE: Exiting after motor enable and mode set. Check CAN traffic!");
-
-  // Return ERROR to stop the system for debugging
-  return CallbackReturn::ERROR;
+              "Hardware interface activated successfully. Waiting for controller to claim interfaces.");
 
   return CallbackReturn::SUCCESS;
 }
@@ -313,12 +284,14 @@ hardware_interface::return_type OpenArm_v10RTHardware::read(
                            function_end - function_start)
                            .count();
 
-  // Only warn if the actual function takes too long (should be < 100us typically)
+  // Only warn if the actual function takes too long (should be < 100us
+  // typically)
   if (read_duration > 100) {
-    RCLCPP_WARN_THROTTLE(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                         steady_clock, LOG_THROTTLE_MS,
-                         "Read function execution time: %ld us (expected < 100 us)",
-                         read_duration);
+    RCLCPP_WARN_THROTTLE(
+        rclcpp::get_logger("OpenArm_v10RTHardware"), steady_clock,
+        LOG_THROTTLE_MS,
+        "Read function execution time: %ld us (expected < 100 us)",
+        read_duration);
   }
 
   return hardware_interface::return_type::OK;
@@ -348,12 +321,14 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
                             function_end - function_start)
                             .count();
 
-  // Only warn if the actual function takes too long (should be < 100us typically)
+  // Only warn if the actual function takes too long (should be < 100us
+  // typically)
   if (write_duration > 100) {
-    RCLCPP_WARN_THROTTLE(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                         steady_clock, LOG_THROTTLE_MS,
-                         "Write function execution time: %ld us (expected < 100 us)",
-                         write_duration);
+    RCLCPP_WARN_THROTTLE(
+        rclcpp::get_logger("OpenArm_v10RTHardware"), steady_clock,
+        LOG_THROTTLE_MS,
+        "Write function execution time: %ld us (expected < 100 us)",
+        write_duration);
   }
 
   return hardware_interface::return_type::OK;
@@ -475,7 +450,8 @@ bool OpenArm_v10RTHardware::load_motor_config_from_yaml(
   auto logger = rclcpp::get_logger("OpenArm_v10RTHardware");
 
   try {
-    RCLCPP_INFO(logger, "Loading motor configuration from %s", file_path.c_str());
+    RCLCPP_INFO(logger, "Loading motor configuration from %s",
+                file_path.c_str());
 
     // Load YAML file
     YAML::Node config = YAML::LoadFile(file_path);
@@ -513,7 +489,8 @@ bool OpenArm_v10RTHardware::load_motor_config_from_yaml(
 
       // Parse motor type (required)
       if (!motor["motor_type"]) {
-        RCLCPP_ERROR(logger, "Missing 'motor_type' for motor '%s'", joint_name.c_str());
+        RCLCPP_ERROR(logger, "Missing 'motor_type' for motor '%s'",
+                     joint_name.c_str());
         return false;
       }
       std::string motor_type_str = motor["motor_type"].as<std::string>();
@@ -544,11 +521,13 @@ bool OpenArm_v10RTHardware::load_motor_config_from_yaml(
 
       // Parse CAN IDs (required)
       if (!motor["send_can_id"]) {
-        RCLCPP_ERROR(logger, "Missing 'send_can_id' for motor '%s'", joint_name.c_str());
+        RCLCPP_ERROR(logger, "Missing 'send_can_id' for motor '%s'",
+                     joint_name.c_str());
         return false;
       }
       if (!motor["recv_can_id"]) {
-        RCLCPP_ERROR(logger, "Missing 'recv_can_id' for motor '%s'", joint_name.c_str());
+        RCLCPP_ERROR(logger, "Missing 'recv_can_id' for motor '%s'",
+                     joint_name.c_str());
         return false;
       }
       motor_config.send_can_id = motor["send_can_id"].as<uint32_t>();
@@ -556,22 +535,27 @@ bool OpenArm_v10RTHardware::load_motor_config_from_yaml(
 
       // Parse MIT mode parameters (required)
       if (!motor["mit_mode"]) {
-        RCLCPP_ERROR(logger, "Missing 'mit_mode' section for motor '%s'", joint_name.c_str());
+        RCLCPP_ERROR(logger, "Missing 'mit_mode' section for motor '%s'",
+                     joint_name.c_str());
         return false;
       }
       if (!motor["mit_mode"]["kp"]) {
-        RCLCPP_ERROR(logger, "Missing 'mit_mode.kp' for motor '%s'", joint_name.c_str());
+        RCLCPP_ERROR(logger, "Missing 'mit_mode.kp' for motor '%s'",
+                     joint_name.c_str());
         return false;
       }
       if (!motor["mit_mode"]["kd"]) {
-        RCLCPP_ERROR(logger, "Missing 'mit_mode.kd' for motor '%s'", joint_name.c_str());
+        RCLCPP_ERROR(logger, "Missing 'mit_mode.kd' for motor '%s'",
+                     joint_name.c_str());
         return false;
       }
       motor_config.kp = motor["mit_mode"]["kp"].as<double>();
       motor_config.kd = motor["mit_mode"]["kd"].as<double>();
 
       motor_configs_.push_back(motor_config);
-      RCLCPP_INFO(logger, "Configured motor '%s': type=%s, send_id=0x%X, recv_id=0x%X, kp=%.2f, kd=%.2f",
+      RCLCPP_INFO(logger,
+                  "Configured motor '%s': type=%s, send_id=0x%X, recv_id=0x%X, "
+                  "kp=%.2f, kd=%.2f",
                   joint_name.c_str(), motor_type_str.c_str(),
                   motor_config.send_can_id, motor_config.recv_can_id,
                   motor_config.kp, motor_config.kd);
@@ -613,7 +597,8 @@ bool OpenArm_v10RTHardware::load_motor_config_from_yaml(
       } else if (motor_type_str == "DM10010") {
         gripper_cfg.motor_type = openarm::damiao_motor::MotorType::DM10010;
       } else {
-        RCLCPP_ERROR(logger, "Unknown motor type for gripper: %s", motor_type_str.c_str());
+        RCLCPP_ERROR(logger, "Unknown motor type for gripper: %s",
+                     motor_type_str.c_str());
         return false;
       }
 
@@ -664,13 +649,17 @@ bool OpenArm_v10RTHardware::load_motor_config_from_yaml(
       }
       gripper_cfg.closed_position = gripper["closed_position"].as<double>();
       gripper_cfg.open_position = gripper["open_position"].as<double>();
-      gripper_cfg.motor_closed_radians = gripper["motor_closed_radians"].as<double>();
-      gripper_cfg.motor_open_radians = gripper["motor_open_radians"].as<double>();
+      gripper_cfg.motor_closed_radians =
+          gripper["motor_closed_radians"].as<double>();
+      gripper_cfg.motor_open_radians =
+          gripper["motor_open_radians"].as<double>();
 
       gripper_config_ = gripper_cfg;
-      RCLCPP_INFO(logger, "Configured gripper: type=%s, send_id=0x%X, recv_id=0x%X, kp=%.2f, kd=%.2f",
-                  motor_type_str.c_str(), gripper_cfg.send_can_id, gripper_cfg.recv_can_id,
-                  gripper_cfg.kp, gripper_cfg.kd);
+      RCLCPP_INFO(logger,
+                  "Configured gripper: type=%s, send_id=0x%X, recv_id=0x%X, "
+                  "kp=%.2f, kd=%.2f",
+                  motor_type_str.c_str(), gripper_cfg.send_can_id,
+                  gripper_cfg.recv_can_id, gripper_cfg.kp, gripper_cfg.kd);
     }
 
     // Update the number of joints based on loaded configuration
@@ -679,7 +668,8 @@ bool OpenArm_v10RTHardware::load_motor_config_from_yaml(
       num_joints_++;  // Add one for the gripper
     }
 
-    RCLCPP_INFO(logger, "Successfully loaded configuration for %zu motors", motor_configs_.size());
+    RCLCPP_INFO(logger, "Successfully loaded configuration for %zu motors",
+                motor_configs_.size());
     return true;
 
   } catch (const YAML::Exception& e) {
@@ -798,10 +788,15 @@ void OpenArm_v10RTHardware::can_worker_loop() {
 
       // Log every 1000 missed cycles with more detail
       if (missed_cycles % 1000 == 0) {
-        auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(cycle_duration).count();
+        auto duration_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                cycle_duration)
+                .count();
         RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                    "CAN worker thread missed %d cycles. Last cycle took %ld us (target: 2500 us). %s cycle.",
-                    missed_cycles, duration_us, send_cycle ? "Send" : "Receive");
+                    "CAN worker thread missed %d cycles. Last cycle took %ld "
+                    "us (target: 2500 us). %s cycle.",
+                    missed_cycles, duration_us,
+                    send_cycle ? "Send" : "Receive");
       }
     }
   }
