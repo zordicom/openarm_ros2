@@ -32,7 +32,6 @@ find_package(OpenArmCAN REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
   src/v10_simple_hardware.cpp
-  src/v10_dual_mode_hardware.cpp
   src/hardware_config.cpp
 )
 

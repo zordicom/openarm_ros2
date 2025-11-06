@@ -3,7 +3,7 @@
 
 namespace openarm_hardware {
 
-double GripperConfig::to_radians(double joint_value) {
+double GripperConfig::to_radians(double joint_value) const {
   double range = open_position - closed_position;
   double motor_range = motor_open_radians - motor_closed_radians;
 
@@ -11,7 +11,7 @@ double GripperConfig::to_radians(double joint_value) {
          ((joint_value - closed_position) / range) * motor_range;
 }
 
-double GripperConfig::to_joint(double motor_radians) {
+double GripperConfig::to_joint(double motor_radians) const {
   double range = open_position - closed_position;
   double motor_range = motor_open_radians - motor_closed_radians;
   return closed_position +
