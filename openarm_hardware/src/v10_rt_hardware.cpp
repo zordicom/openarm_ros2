@@ -96,7 +96,7 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_configure(
   // Create RT-safe OpenArm interface
   openarm_rt_ = std::make_unique<openarm::can::RTSafeOpenArm>();
 
-  if (!openarm_rt_->init(config_.can_interface, false)) {  // false = no CAN-FD
+  if (!openarm_rt_->init(config_.can_interface)) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
                  "Failed to initialize RT-safe OpenArm interface");
     return CallbackReturn::ERROR;
