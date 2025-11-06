@@ -196,9 +196,20 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_activate(
     }
   }
 
-  // Don't enable motors or set modes here - wait for interface claiming
+  // Enable motors on activation so they can respond to commands
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
-              "Hardware interface activated successfully. Waiting for controller to claim interfaces.");
+              "Enabling motors on activation");
+
+  size_t enabled = openarm_rt_->enable_all_motors_rt(1000);
+  if (enabled != openarm_rt_->get_motor_count()) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                 "Failed to enable all motors: %zu/%zu",
+                 enabled, openarm_rt_->get_motor_count());
+    return CallbackReturn::ERROR;
+  }
+
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "Hardware interface activated successfully. Motors enabled and ready.");
 
   return CallbackReturn::SUCCESS;
 }
@@ -338,6 +349,16 @@ hardware_interface::return_type
 OpenArm_v10RTHardware::prepare_command_mode_switch(
     const std::vector<std::string>& start_interfaces,
     const std::vector<std::string>& stop_interfaces) {
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "prepare_command_mode_switch called with %zu start interfaces and %zu stop interfaces",
+              start_interfaces.size(), stop_interfaces.size());
+
+  // Log the interfaces being started
+  for (const auto& interface : start_interfaces) {
+    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                "  Starting interface: %s", interface.c_str());
+  }
+
   // Determine new mode from interfaces
   ControlMode new_mode = determine_mode_from_interfaces(start_interfaces);
 
@@ -346,6 +367,9 @@ OpenArm_v10RTHardware::prepare_command_mode_switch(
                  "Invalid interface combination for mode switch");
     return hardware_interface::return_type::ERROR;
   }
+
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "Determined new mode: %d", static_cast<int>(new_mode));
 
   // Store pending mode
   pending_mode_ = new_mode;
@@ -748,6 +772,10 @@ void OpenArm_v10RTHardware::can_worker_loop() {
           openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
                                             config_.can_timeout_us);
         }
+      } else {
+        // No active controller - send refresh command to get motor states
+        // This uses the special 0x7FF CAN ID to request state feedback
+        openarm_rt_->refresh_all_motors_rt(config_.can_timeout_us);
       }
     } else {
       // RECEIVE CYCLE: Read states from motors
@@ -840,12 +868,46 @@ bool OpenArm_v10RTHardware::perform_mode_switch_async() {
 }
 
 bool OpenArm_v10RTHardware::switch_to_mit_mode() {
+  // If motors are not enabled yet (first mode switch), enable them first
+  if (current_mode_ == ControlMode::UNINITIALIZED) {
+    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                "Enabling motors for MIT mode");
+
+    // Enable motors - this is RT-safe and non-blocking
+    size_t enabled = openarm_rt_->enable_all_motors_rt(1000);
+    if (enabled != openarm_rt_->get_motor_count()) {
+      RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                   "Failed to enable all motors: %zu/%zu",
+                   enabled, openarm_rt_->get_motor_count());
+      return false;
+    }
+
+    // No delay needed - motors will respond with feedback
+  }
+
   // Send mode switch commands to motors using RT-safe method
   return openarm_rt_->set_mode_all_rt(
       openarm::can::RTSafeOpenArm::ControlMode::MIT, 1000);
 }
 
 bool OpenArm_v10RTHardware::switch_to_position_mode() {
+  // If motors are not enabled yet (first mode switch), enable them first
+  if (current_mode_ == ControlMode::UNINITIALIZED) {
+    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                "Enabling motors for Position/Velocity mode");
+
+    // Enable motors - this is RT-safe and non-blocking
+    size_t enabled = openarm_rt_->enable_all_motors_rt(1000);
+    if (enabled != openarm_rt_->get_motor_count()) {
+      RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                   "Failed to enable all motors: %zu/%zu",
+                   enabled, openarm_rt_->get_motor_count());
+      return false;
+    }
+
+    // No delay needed - motors will respond with feedback
+  }
+
   // Send mode switch commands to motors using RT-safe method
   return openarm_rt_->set_mode_all_rt(
       openarm::can::RTSafeOpenArm::ControlMode::POSITION_VELOCITY, 1000);
