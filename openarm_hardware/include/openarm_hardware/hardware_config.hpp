@@ -21,22 +21,28 @@
 
 namespace openarm_hardware {
 
-/**
- * @brief Configuration for a single motor
- */
+// Based on DM motor control modes
+enum class ControlMode {
+  UNINITIALIZED = -1,
+  MIT = 1,                // MIT mode (torque/impedance control)
+  POSITION_VELOCITY = 2,  // Position-Velocity mode (0x100 + ID frame)
+  VELOCITY = 3,           // Velocity mode (not implemented)
+  TORQUE_POSITION = 4     // Torque-Position mode (not implemented)
+};
+
+// Configuration for a single motor
 struct MotorConfig {
   std::string name;
   openarm::damiao_motor::MotorType type;
   uint32_t send_can_id;
   uint32_t recv_can_id;
-  double kp;      // Used in MIT mode
-  double kd;      // Used in MIT mode
+  double kp;            // Used in MIT mode
+  double kd;            // Used in MIT mode
   double max_velocity;  // Max velocity for position mode (rad/s)
 };
 
-/**
- * @brief Configuration for the gripper
- */
+// Similar to motor config, but with a few extra parameters to convert between
+// 0,1 joint states to motor radians
 struct GripperConfig {
   std::string name;
   openarm::damiao_motor::MotorType motor_type;
@@ -49,6 +55,12 @@ struct GripperConfig {
   double motor_closed_radians;
   double motor_open_radians;
   double max_velocity;  // Max velocity for position mode
+
+  // Maps joint [0, 1] to motor radians
+  double to_radians(double joint_value) const;
+
+  // Maps motor radians to joint [0, 1]
+  double to_joint(double motor_radians) const;
 };
 
 struct ControllerConfig {
@@ -62,10 +74,5 @@ struct ControllerConfig {
   std::vector<MotorConfig> arm_joints;
   std::optional<GripperConfig> gripper_joint;
 };
-
-double gripper_joint_to_motor_radians(const GripperConfig& config,
-                                      double joint_value);
-double gripper_motor_radians_to_joint(const GripperConfig& config,
-                                      double motor_radians);
 
 }  // namespace openarm_hardware

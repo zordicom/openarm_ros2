@@ -30,13 +30,4 @@
       Supports both MIT mode (effort interface) and Position-Velocity mode (position interface).
     </description>
   </class>
-  <class name="openarm_hardware/OpenArm_v10RTHardware"
-         type="openarm_hardware::OpenArm_v10RTHardware"
-         base_class_type="hardware_interface::SystemInterface">
-    <description>
-      RT-safe ros2_control hardware interface for OpenArm V10.
-      Provides deterministic real-time performance with non-blocking CAN operations.
-      Supports both MIT mode and Position-Velocity mode with RT-safe mode switching.
-    </description>
-  </class>
 </library>
