@@ -66,6 +66,27 @@ struct ControllerConfig {
   std::optional<GripperConfig> gripper_joint;
 };
 
+/**
+ * @brief RT-specific hardware configuration
+ */
+struct HardwareConfig {
+  // CAN interface configuration
+  std::string can_interface = "can0";
+  int can_timeout_us = 500;  // microseconds
+
+  // RT thread configuration
+  int rt_priority = 0;  // 0 = don't set, 1-99 = RT priority
+  int worker_thread_priority = 0;  // Priority for worker thread
+  std::vector<int> cpu_affinity;  // CPU cores for worker thread
+
+  // Timing constraints
+  int max_cycle_time_us = 1000;  // Maximum cycle time in microseconds
+
+  // MIT mode parameters (default values)
+  double mit_kp = 5.0;
+  double mit_kd = 0.5;
+};
+
 double gripper_joint_to_motor_radians(const GripperConfig& config,
                                       double joint_value);
 double gripper_motor_radians_to_joint(const GripperConfig& config,
