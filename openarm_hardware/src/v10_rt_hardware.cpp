@@ -544,12 +544,9 @@ void OpenArm_v10RTHardware::can_worker_loop() {
   // Cycle counter for alternating pattern
   uint32_t cycle_counter = 0;
 
-  // Get initial cycle start time using RT-safe monotonic clock
-  struct timespec next_cycle, cycle_start, cycle_end;
-  clock_gettime(CLOCK_MONOTONIC, &next_cycle);
-
   while (worker_running_) {
     // Mark cycle start
+    struct timespec cycle_start, cycle_end;
     clock_gettime(CLOCK_MONOTONIC, &cycle_start);
 
     // Alternate between sending and receiving to reduce CAN bus load
@@ -666,16 +663,14 @@ void OpenArm_v10RTHardware::can_worker_loop() {
       last_stats_log_ = now;
     }
 
-    // Calculate next cycle time (absolute time prevents drift)
-    next_cycle.tv_nsec += cycle_time_ns;
-
-    // Handle nanosecond overflow
-    while (next_cycle.tv_nsec >= 1000000000L) {
-      next_cycle.tv_sec++;
-      next_cycle.tv_nsec -= 1000000000L;
+    // Sleep to maintain cycle time (use relative sleep like working version)
+    if (cycle_duration_ns < static_cast<uint64_t>(cycle_time_ns)) {
+      int64_t sleep_ns = cycle_time_ns - cycle_duration_ns;
+      struct timespec sleep_time;
+      sleep_time.tv_sec = sleep_ns / 1000000000L;
+      sleep_time.tv_nsec = sleep_ns % 1000000000L;
+      clock_nanosleep(CLOCK_MONOTONIC, 0, &sleep_time, nullptr);
     }
-
-    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_cycle, nullptr);
   }
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
