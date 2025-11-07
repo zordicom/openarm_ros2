@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include "openarm_hardware/v10_simple_hardware.hpp"
-#include "openarm_hardware/config_yaml.hpp"
 
 #include <yaml-cpp/yaml.h>
 
@@ -24,52 +23,12 @@
 #include <vector>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
+#include "openarm_hardware/config_yaml.hpp"
+#include "openarm_hardware/hardware_config.hpp"
 #include "rclcpp/logging.hpp"
 #include "rclcpp/rclcpp.hpp"
 
-namespace {
-// Helper function to convert motor error code to human-readable string
-std::string error_code_to_string(uint8_t error_code) {
-  switch (error_code) {
-    case 0x1:
-      return "No error";
-    case 0x8:
-      return "Overvoltage";
-    case 0x9:
-      return "Undervoltage";
-    case 0xA:
-      return "Overcurrent";
-    case 0xB:
-      return "MOS overtemperature";
-    case 0xC:
-      return "Motor coil overtemperature";
-    case 0xD:
-      return "Communication loss";
-    case 0xE:
-      return "Overload";
-    default:
-      return "Unknown error (0x" + std::to_string(error_code) + ")";
-  }
-}
-}  // namespace
-
 namespace openarm_hardware {
-
-double gripper_joint_to_motor_radians(const GripperConfig& c,
-                                      double joint_value) {
-  double range = c.open_position - c.closed_position;
-  double motor_range = c.motor_open_radians - c.motor_closed_radians;
-  return c.motor_closed_radians +
-         ((joint_value - c.closed_position) / range) * motor_range;
-}
-
-double gripper_motor_radians_to_joint(const GripperConfig& c,
-                                      double motor_radians) {
-  double range = c.open_position - c.closed_position;
-  double motor_range = c.motor_open_radians - c.motor_closed_radians;
-  return c.closed_position +
-         ((motor_radians - c.motor_closed_radians) / motor_range) * range;
-}
 
 OpenArm_v10HW::OpenArm_v10HW() = default;
 
@@ -174,8 +133,8 @@ hardware_interface::CallbackReturn OpenArm_v10HW::on_init(
               config_.can_fd ? "enabled" : "disabled");
 
   try {
-    openarm_ = std::make_unique<openarm::can::socket::OpenArm>(config_.can_iface,
-                                                               config_.can_fd);
+    openarm_ = std::make_unique<openarm::can::socket::OpenArm>(
+        config_.can_iface, config_.can_fd);
   } catch (const std::exception& e) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
                  "Failed to initialize OpenArm on interface %s: %s",
@@ -234,7 +193,8 @@ hardware_interface::CallbackReturn OpenArm_v10HW::on_configure(
   // Set all motors to MIT mode (CTRL_MODE = 1)
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
               "Setting all motors to MIT mode (CTRL_MODE=1)...");
-  openarm_->write_param_all(static_cast<int>(openarm::damiao_motor::RID::CTRL_MODE), 1);
+  openarm_->write_param_all(
+      static_cast<int>(openarm::damiao_motor::RID::CTRL_MODE), 1);
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   openarm_->recv_all();
 
@@ -302,11 +262,12 @@ hardware_interface::CallbackReturn OpenArm_v10HW::on_activate(
   // Initialize gripper command to current position if enabled
   if (config_.gripper_joint.has_value()) {
     size_t gripper_idx = config_.arm_joints.size();
+
     const auto& gripper_motors = openarm_->get_gripper().get_motors();
     if (!gripper_motors.empty()) {
       double motor_pos = gripper_motors[0].get_position();
-      pos_commands_[gripper_idx] = gripper_motor_radians_to_joint(
-          config_.gripper_joint.value(), motor_pos);
+      pos_commands_[gripper_idx] =
+          config_.gripper_joint.value().to_joint(motor_pos);
       vel_commands_[gripper_idx] = 0.0;
       tau_commands_[gripper_idx] = 0.0;
       RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
@@ -356,10 +317,11 @@ hardware_interface::return_type OpenArm_v10HW::read(
     if (motor.has_unrecoverable_error()) {
       uint8_t error_code = motor.get_state_error();
       std::string error_msg = error_code_to_string(error_code);
-      RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
-                   "Arm motor %zu (CAN ID 0x%03X) has unrecoverable error: %s (0x%X). "
-                   "Stopping controller.",
-                   i, motor.get_send_can_id(), error_msg.c_str(), error_code);
+      RCLCPP_ERROR(
+          rclcpp::get_logger("OpenArm_v10HW"),
+          "Arm motor %zu (CAN ID 0x%03X) has unrecoverable error: %s (0x%X). "
+          "Stopping controller.",
+          i, motor.get_send_can_id(), error_msg.c_str(), error_code);
       return hardware_interface::return_type::ERROR;
     }
 
@@ -380,7 +342,8 @@ hardware_interface::return_type OpenArm_v10HW::read(
         uint8_t error_code = motor.get_state_error();
         std::string error_msg = error_code_to_string(error_code);
         RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
-                     "Gripper motor %zu (CAN ID 0x%03X) has unrecoverable error: %s (0x%X). "
+                     "Gripper motor %zu (CAN ID 0x%03X) has unrecoverable "
+                     "error: %s (0x%X). "
                      "Stopping controller.",
                      i, motor.get_send_can_id(), error_msg.c_str(), error_code);
         return hardware_interface::return_type::ERROR;
@@ -391,12 +354,13 @@ hardware_interface::return_type OpenArm_v10HW::read(
       // TODO the mappings are approximates
       // Convert motor position (radians) to joint value
       double motor_pos = gripper_motors[0].get_position();
-      pos_states_[gripper_idx] = gripper_motor_radians_to_joint(
-          config_.gripper_joint.value(), motor_pos);
+      pos_states_[gripper_idx] =
+          config_.gripper_joint.value().to_joint(motor_pos);
 
-      // Unimplemented: Velocity and torque mapping
-      vel_states_[gripper_idx] = 0;  // gripper_motors[0].get_velocity();
-      tau_states_[gripper_idx] = 0;  // gripper_motors[0].get_torque();
+      // Pass through velocity and torque directly
+      // TODO: These may need scaling based on gripper mechanism
+      vel_states_[gripper_idx] = gripper_motors[0].get_velocity();
+      tau_states_[gripper_idx] = gripper_motors[0].get_torque();
     }
   }
 
@@ -413,7 +377,8 @@ hardware_interface::return_type OpenArm_v10HW::write(
       uint8_t error_code = motor.get_state_error();
       std::string error_msg = error_code_to_string(error_code);
       RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
-                   "Cannot send commands: Arm motor %zu (CAN ID 0x%03X) has unrecoverable error: %s (0x%X).",
+                   "Cannot send commands: Arm motor %zu (CAN ID 0x%03X) has "
+                   "unrecoverable error: %s (0x%X).",
                    i, motor.get_send_can_id(), error_msg.c_str(), error_code);
       return hardware_interface::return_type::ERROR;
     }
@@ -428,7 +393,8 @@ hardware_interface::return_type OpenArm_v10HW::write(
         uint8_t error_code = motor.get_state_error();
         std::string error_msg = error_code_to_string(error_code);
         RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
-                     "Cannot send commands: Gripper motor %zu (CAN ID 0x%03X) has unrecoverable error: %s (0x%X).",
+                     "Cannot send commands: Gripper motor %zu (CAN ID 0x%03X) "
+                     "has unrecoverable error: %s (0x%X).",
                      i, motor.get_send_can_id(), error_msg.c_str(), error_code);
         return hardware_interface::return_type::ERROR;
       }
@@ -451,8 +417,7 @@ hardware_interface::return_type OpenArm_v10HW::write(
     assert(joint_names_.size() == 1 + config_.arm_joints.size());
     // TODO the true mappings are unimplemented.
     size_t idx = config_.arm_joints.size();
-    double motor_command =
-        gripper_joint_to_motor_radians(gripper, pos_commands_[idx]);
+    double motor_command = gripper.to_radians(pos_commands_[idx]);
 
     openarm_->get_gripper().mit_control_all(
         {{gripper.kp, gripper.kd, motor_command, 0, 0}});
@@ -478,7 +443,7 @@ void OpenArm_v10HW::return_to_zero() {
     openarm_->get_gripper().mit_control_all(
         {{gripper.kp, gripper.kd, gripper.closed_position, 0.0, 0.0}});
   }
-  std::this_thread::sleep_for(std::chrono::microseconds(1000));
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   openarm_->recv_all();
 }
 
