@@ -14,8 +14,6 @@
 
 #pragma once
 
-#include <yaml-cpp/yaml.h>
-
 #include <chrono>
 #include <fstream>
 #include <memory>
@@ -95,11 +93,8 @@ class OpenArm_v10HW : public hardware_interface::SystemInterface {
   // Helper methods
   void return_to_zero();
   bool parse_config(const hardware_interface::HardwareInfo& info);
-  bool generate_joint_names();
-  bool load_motor_config_from_yaml(const std::string& yaml_file);
 
   ControllerConfig config_;
-  std::string motor_config_file_;
 };
 
 }  // namespace openarm_hardware

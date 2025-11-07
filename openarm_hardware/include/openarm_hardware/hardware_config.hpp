@@ -98,4 +98,16 @@ struct HardwareConfig {
 // Convert motor error code to string.
 std::string error_code_to_string(uint8_t error_code);
 
+// Helper functions for parsing parameters from hardware_interface::HardwareInfo
+
+// Throws std::runtime_error if motor type is unknown
+openarm::damiao_motor::MotorType parse_motor_type_param(
+    const std::string& type_str);
+
+// Accepts: true/false, 1/0, yes/no (case-insensitive)
+// Throws std::runtime_error if parsing fails
+bool parse_bool_param(const std::string& str);
+
+std::string error_code_to_string(uint8_t error_code);
+
 }  // namespace openarm_hardware
