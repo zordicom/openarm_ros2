@@ -91,10 +91,6 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
       const std::vector<std::string>& start_interfaces,
       const std::vector<std::string>& stop_interfaces) override;
 
- public:
-  // Control modes
-  enum class ControlMode { UNINITIALIZED, POSITION_VELOCITY, MIT };
-
  private:
   // Configuration
   HardwareConfig config_;

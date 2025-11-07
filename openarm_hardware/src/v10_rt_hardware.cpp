@@ -34,9 +34,6 @@ static rclcpp::Clock steady_clock(RCL_STEADY_TIME);
 
 namespace openarm_hardware {
 
-// Control mode enum (matches header definition)
-using ControlMode = OpenArm_v10RTHardware::ControlMode;
-
 OpenArm_v10RTHardware::OpenArm_v10RTHardware() {
   // Pre-allocate command and state buffers
   command_buffer_.writeFromNonRT(CommandData{});
@@ -523,8 +520,8 @@ void OpenArm_v10RTHardware::can_worker_loop() {
           mit_params_[i].q = cmd->positions[i];
           mit_params_[i].dq = cmd->velocities[i];
           mit_params_[i].tau = cmd->torques[i];
-          mit_params_[i].kp = config_.mit_kp;
-          mit_params_[i].kd = config_.mit_kd;
+          mit_params_[i].kp = controller_config_.arm_joints[i].kp;
+          mit_params_[i].kd = controller_config_.arm_joints[i].kd;
         }
         // Send MIT commands (batch) using RT-safe method
         openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_,
@@ -719,16 +716,12 @@ bool OpenArm_v10RTHardware::switch_to_position_mode() {
 ControlMode OpenArm_v10RTHardware::determine_mode_from_interfaces(
     const std::vector<std::string>& interfaces) {
   bool has_position = false;
-  bool has_velocity = false;
   bool has_effort = false;
 
   for (const auto& interface : interfaces) {
     if (interface.find(hardware_interface::HW_IF_POSITION) !=
         std::string::npos) {
       has_position = true;
-    } else if (interface.find(hardware_interface::HW_IF_VELOCITY) !=
-               std::string::npos) {
-      has_velocity = true;
     } else if (interface.find(hardware_interface::HW_IF_EFFORT) !=
                std::string::npos) {
       has_effort = true;
