@@ -42,12 +42,16 @@ constexpr size_t MAX_JOINTS = 10;
 /**
  * @brief RT-safe OpenArm V10 Hardware Interface
  *
- * This implementation addresses the main realtime violations:
+ * This implementation uses a two-thread RT architecture:
+ * - High-priority RT thread: Runs read()/write() methods, must complete <100us
+ * - Lower-priority RT thread: Handles CAN communication at ~600Hz
+ *
+ * Key RT-safety features:
  * - Pre-allocates all buffers
  * - Uses non-blocking CAN operations with timeouts
- * - Moves mode switching to async handler
- * - Uses RealtimeBuffer for thread-safe data exchange
- * - Replaces console logging with RT-safe throttled logging
+ * - Moves mode switching to lower-priority RT worker thread
+ * - Uses RealtimeBuffer for lock-free thread-safe data exchange
+ * - Uses RT-safe throttled logging
  */
 class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
  public:
@@ -147,7 +151,7 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
   // RT-safe OpenArm interface
   std::unique_ptr<openarm::can::RTSafeOpenArm> openarm_rt_;
 
-  // Non-RT worker thread for CAN communication
+  // Lower-priority RT worker thread for CAN communication
   std::thread can_worker_thread_;
   std::atomic<bool> worker_running_{false};
 

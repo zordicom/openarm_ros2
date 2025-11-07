@@ -144,7 +144,7 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_activate(
   can_worker_thread_ =
       std::thread(&OpenArm_v10RTHardware::can_worker_loop, this);
 
-  // Configure worker thread (non-RT, lower priority)
+  // Configure worker thread as lower-priority RT thread
   if (config_.worker_thread_priority > 0) {
     struct sched_param param;
     param.sched_priority = config_.worker_thread_priority;
@@ -554,7 +554,7 @@ bool OpenArm_v10RTHardware::parse_config(
 
 
 void OpenArm_v10RTHardware::can_worker_loop() {
-  // This runs in a separate non-RT thread
+  // This runs in a separate lower-priority RT thread
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
               "CAN worker thread started");
 
@@ -646,7 +646,7 @@ void OpenArm_v10RTHardware::can_worker_loop() {
     if (cycle_duration < cycle_time) {
       std::this_thread::sleep_until(cycle_start + cycle_time);
     } else {
-      // Log if we're missing cycles (non-RT thread, so logging is OK)
+      // Log if we're missing cycles (lower-priority RT thread, so throttled logging is OK)
       static int missed_cycles = 0;
       missed_cycles++;
 
@@ -670,7 +670,7 @@ void OpenArm_v10RTHardware::can_worker_loop() {
 }
 
 bool OpenArm_v10RTHardware::perform_mode_switch_async() {
-  // This is called from the async handler (non-RT context)
+  // This is called from the lower-priority RT worker thread
   ControlMode new_mode = pending_mode_.load();
   ControlMode old_mode = current_mode_.load();
 
