@@ -25,14 +25,14 @@ find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
-find_package(yaml-cpp REQUIRED)
 
 # Find openarm_can library
 find_package(OpenArmCAN REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
+  src/hardware_config.cpp
   src/v10_simple_hardware.cpp
-  src/v10_dual_mode_hardware.cpp
+  src/hardware_config.cpp
 )
 
 target_include_directories(
@@ -43,7 +43,7 @@ target_include_directories(
 
 target_link_libraries(${PROJECT_NAME}
   OpenArmCAN::openarm_can
-  yaml-cpp
+  pthread
 )
 
 ament_target_dependencies(${PROJECT_NAME}

@@ -21,21 +21,28 @@
 
 namespace openarm_hardware {
 
-/**
- * @brief Configuration for a single motor
- */
+// Based on DM motor control modes
+enum class ControlMode {
+  UNINITIALIZED = -1,
+  MIT = 1,                // MIT mode (torque/impedance control)
+  POSITION_VELOCITY = 2,  // Position-Velocity mode (0x100 + ID frame)
+  VELOCITY = 3,           // Velocity mode (not implemented)
+  TORQUE_POSITION = 4     // Torque-Position mode (not implemented)
+};
+
+// Configuration for a single motor
 struct MotorConfig {
   std::string name;
   openarm::damiao_motor::MotorType type;
   uint32_t send_can_id;
   uint32_t recv_can_id;
-  double kp;      // Used in MIT mode
-  double kd;      // Used in MIT mode
+  double kp;            // Used in MIT mode
+  double kd;            // Used in MIT mode
+  double max_velocity;  // Max velocity for position mode (rad/s)
 };
 
-/**
- * @brief Configuration for the gripper
- */
+// Similar to motor config, but with a few extra parameters to convert between
+// 0,1 joint states to motor radians
 struct GripperConfig {
   std::string name;
   openarm::damiao_motor::MotorType motor_type;
@@ -47,6 +54,13 @@ struct GripperConfig {
   double open_position;
   double motor_closed_radians;
   double motor_open_radians;
+  double max_velocity;  // Max velocity for position mode
+
+  // Maps joint [0, 1] to motor radians
+  double to_radians(double joint_value) const;
+
+  // Maps motor radians to joint [0, 1]
+  double to_joint(double motor_radians) const;
 };
 
 struct ControllerConfig {
@@ -64,30 +78,19 @@ struct ControllerConfig {
   std::optional<GripperConfig> gripper_joint;
 };
 
-/**
- * @brief RT-specific hardware configuration
- */
-struct HardwareConfig {
-  // CAN interface configuration
-  std::string can_interface = "can0";
-  int can_timeout_us = 500;  // microseconds
+// Convert motor error code to string.
+std::string error_code_to_string(uint8_t error_code);
 
-  // RT thread configuration
-  int rt_priority = 0;  // 0 = don't set, 1-99 = RT priority
-  int worker_thread_priority = 0;  // Priority for worker thread
-  std::vector<int> cpu_affinity;  // CPU cores for worker thread
+// Helper functions for parsing parameters from hardware_interface::HardwareInfo
 
-  // Timing constraints
-  int max_cycle_time_us = 1000;  // Maximum cycle time in microseconds
+// Throws std::runtime_error if motor type is unknown
+openarm::damiao_motor::MotorType parse_motor_type_param(
+    const std::string& type_str);
 
-  // MIT mode parameters (default values)
-  double mit_kp = 5.0;
-  double mit_kd = 0.5;
-};
+// Accepts: true/false, 1/0, yes/no (case-insensitive)
+// Throws std::runtime_error if parsing fails
+bool parse_bool_param(const std::string& str);
 
-double gripper_joint_to_motor_radians(const GripperConfig& config,
-                                      double joint_value);
-double gripper_motor_radians_to_joint(const GripperConfig& config,
-                                      double motor_radians);
+std::string error_code_to_string(uint8_t error_code);
 
 }  // namespace openarm_hardware
