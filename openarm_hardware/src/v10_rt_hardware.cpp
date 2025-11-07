@@ -14,8 +14,10 @@
 
 #include "openarm_hardware/v10_rt_hardware.hpp"
 
+#include <errno.h>
 #include <pthread.h>
 #include <sched.h>
+#include <time.h>
 
 #include <algorithm>
 #include <chrono>
@@ -83,7 +85,7 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_init(
 OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_configure(
     const rclcpp_lifecycle::State& /*previous_state*/) {
   // Create RT-safe OpenArm interface
-  openarm_rt_ = std::make_unique<openarm::can::RTSafeOpenArm>();
+  openarm_rt_ = std::make_unique<openarm::realtime::OpenArm>();
 
   if (!openarm_rt_->init(config_.can_interface)) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
@@ -107,9 +109,10 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_configure(
 
   // Add gripper motor if configured
   if (controller_config_.gripper_joint.has_value()) {
-    int gripper_idx = openarm_rt_->add_motor(controller_config_.gripper_joint->motor_type,
-                                             controller_config_.gripper_joint->send_can_id,
-                                             controller_config_.gripper_joint->recv_can_id);
+    int gripper_idx =
+        openarm_rt_->add_motor(controller_config_.gripper_joint->motor_type,
+                               controller_config_.gripper_joint->send_can_id,
+                               controller_config_.gripper_joint->recv_can_id);
     if (gripper_idx < 0) {
       RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
                    "Failed to add gripper motor to RT-safe wrapper");
@@ -175,7 +178,7 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_activate(
                   "Failed to set CPU affinity for CAN worker thread");
     } else {
       std::stringstream ss;
-      for (size_t i = 0; i < config_.cpu_affinity.size(); ++i) {
+      for (size_t i = 0; i < config_.cpu_affinity.size(); i++) {
         if (i > 0) ss << ",";
         ss << config_.cpu_affinity[i];
       }
@@ -227,7 +230,7 @@ std::vector<hardware_interface::StateInterface>
 OpenArm_v10RTHardware::export_state_interfaces() {
   std::vector<hardware_interface::StateInterface> state_interfaces;
 
-  for (size_t i = 0; i < num_joints_; ++i) {
+  for (size_t i = 0; i < num_joints_; i++) {
     state_interfaces.emplace_back(
         joint_names_[i], hardware_interface::HW_IF_POSITION, &pos_states_[i]);
     state_interfaces.emplace_back(
@@ -243,7 +246,7 @@ std::vector<hardware_interface::CommandInterface>
 OpenArm_v10RTHardware::export_command_interfaces() {
   std::vector<hardware_interface::CommandInterface> command_interfaces;
 
-  for (size_t i = 0; i < num_joints_; ++i) {
+  for (size_t i = 0; i < num_joints_; i++) {
     command_interfaces.emplace_back(
         joint_names_[i], hardware_interface::HW_IF_POSITION, &pos_commands_[i]);
     command_interfaces.emplace_back(
@@ -257,14 +260,11 @@ OpenArm_v10RTHardware::export_command_interfaces() {
 
 hardware_interface::return_type OpenArm_v10RTHardware::read(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
-  // Measure actual function execution time
-  auto function_start = std::chrono::steady_clock::now();
-
   // This is called from RT context - just copy from the realtime buffer
   auto state = state_buffer_.readFromRT();
 
   if (state && state->valid) {
-    for (size_t i = 0; i < num_joints_; ++i) {
+    for (size_t i = 0; i < num_joints_; i++) {
       pos_states_[i] = state->positions[i];
       vel_states_[i] = state->velocities[i];
       tau_states_[i] = state->torques[i];
@@ -281,30 +281,11 @@ hardware_interface::return_type OpenArm_v10RTHardware::read(
     }
   }
 
-  // Monitor actual function execution time (RT-safe)
-  auto function_end = std::chrono::steady_clock::now();
-  auto read_duration = std::chrono::duration_cast<std::chrono::microseconds>(
-                           function_end - function_start)
-                           .count();
-
-  // Only warn if the actual function takes too long (should be < 100us
-  // typically)
-  if (read_duration > 100) {
-    RCLCPP_WARN_THROTTLE(
-        rclcpp::get_logger("OpenArm_v10RTHardware"), steady_clock,
-        LOG_THROTTLE_MS,
-        "Read function execution time: %ld us (expected < 100 us)",
-        read_duration);
-  }
-
   return hardware_interface::return_type::OK;
 }
 
 hardware_interface::return_type OpenArm_v10RTHardware::write(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
-  // Measure actual function execution time
-  auto function_start = std::chrono::steady_clock::now();
-
   // This is called from RT context - just write to the realtime buffer
   CommandData cmd;
   cmd.mode = current_mode_.load();
@@ -315,7 +296,7 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
     cmd.valid = false;
   } else {
     cmd.valid = true;
-    for (size_t i = 0; i < num_joints_; ++i) {
+    for (size_t i = 0; i < num_joints_; i++) {
       cmd.positions[i] = pos_commands_[i];
       cmd.velocities[i] = vel_commands_[i];
       cmd.torques[i] = tau_commands_[i];
@@ -323,22 +304,6 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
   }
 
   command_buffer_.writeFromNonRT(cmd);
-
-  // Monitor actual function execution time (RT-safe)
-  auto function_end = std::chrono::steady_clock::now();
-  auto write_duration = std::chrono::duration_cast<std::chrono::microseconds>(
-                            function_end - function_start)
-                            .count();
-
-  // Only warn if the actual function takes too long (should be < 100us
-  // typically)
-  if (write_duration > 100) {
-    RCLCPP_WARN_THROTTLE(
-        rclcpp::get_logger("OpenArm_v10RTHardware"), steady_clock,
-        LOG_THROTTLE_MS,
-        "Write function execution time: %ld us (expected < 100 us)",
-        write_duration);
-  }
 
   return hardware_interface::return_type::OK;
 }
@@ -372,34 +337,6 @@ OpenArm_v10RTHardware::prepare_command_mode_switch(
 
   // Store pending mode
   pending_mode_ = new_mode;
-
-  // Update interface claiming states based on stop_interfaces
-  for (const auto& interface : stop_interfaces) {
-    if (interface.find(hardware_interface::HW_IF_POSITION) !=
-        std::string::npos) {
-      position_interface_claimed_ = false;
-    } else if (interface.find(hardware_interface::HW_IF_VELOCITY) !=
-               std::string::npos) {
-      velocity_interface_claimed_ = false;
-    } else if (interface.find(hardware_interface::HW_IF_EFFORT) !=
-               std::string::npos) {
-      effort_interface_claimed_ = false;
-    }
-  }
-
-  // Update interface claiming states based on start_interfaces
-  for (const auto& interface : start_interfaces) {
-    if (interface.find(hardware_interface::HW_IF_POSITION) !=
-        std::string::npos) {
-      position_interface_claimed_ = true;
-    } else if (interface.find(hardware_interface::HW_IF_VELOCITY) !=
-               std::string::npos) {
-      velocity_interface_claimed_ = true;
-    } else if (interface.find(hardware_interface::HW_IF_EFFORT) !=
-               std::string::npos) {
-      effort_interface_claimed_ = true;
-    }
-  }
 
   return hardware_interface::return_type::OK;
 }
@@ -481,7 +418,8 @@ bool OpenArm_v10RTHardware::parse_config(
 
         auto motor_type_it = params.find("motor_type");
         if (motor_type_it == params.end()) {
-          RCLCPP_ERROR(logger, "Gripper joint '%s' missing 'motor_type' parameter",
+          RCLCPP_ERROR(logger,
+                       "Gripper joint '%s' missing 'motor_type' parameter",
                        joint.name.c_str());
           return false;
         }
@@ -493,7 +431,8 @@ bool OpenArm_v10RTHardware::parse_config(
         gripper.kd = std::stod(params.at("kd"));
         gripper.closed_position = std::stod(params.at("closed_position"));
         gripper.open_position = std::stod(params.at("open_position"));
-        gripper.motor_closed_radians = std::stod(params.at("motor_closed_radians"));
+        gripper.motor_closed_radians =
+            std::stod(params.at("motor_closed_radians"));
         gripper.motor_open_radians = std::stod(params.at("motor_open_radians"));
         gripper.max_velocity = std::stod(params.at("max_velocity"));
 
@@ -551,118 +490,96 @@ bool OpenArm_v10RTHardware::parse_config(
   }
 }
 
-
-
 void OpenArm_v10RTHardware::can_worker_loop() {
   // This runs in a separate lower-priority RT thread
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
               "CAN worker thread started");
 
   // Set thread name for debugging
-  pthread_setname_np(pthread_self(), "openarm_can");
+  pthread_setname_np(pthread_self(), "can_rw_worker");
 
-  // Alternating pattern: send on even cycles, receive on odd cycles
-  // This gives cycle_time / 2 (tx + rx direction)
-  const auto cycle_time = std::chrono::microseconds(1600);  // 600Hz base rate
+  // CAN communication cycle: send commands then immediately receive responses
+  // Rate: 375Hz (2.667ms cycle) for CAN 2.0 1Mbps bus with 8 motors
+  // Bandwidth: 8 motors * 2 frames (TX+RX) * 130 bits * 375Hz = ~780 kbps
+  const int64_t cycle_time_ns = 2666667;  // 2666.667us = 2.667ms = 375Hz
 
-  // Cycle counter for alternating pattern
-  uint32_t cycle_counter = 0;
+  // Get initial cycle start time using RT-safe monotonic clock
+  struct timespec next_cycle;
+  clock_gettime(CLOCK_MONOTONIC, &next_cycle);
 
   while (worker_running_) {
-    auto cycle_start = std::chrono::steady_clock::now();
-
-    // Alternate between sending and receiving to reduce CAN bus load
-    bool send_cycle = (cycle_counter % 2 == 0);
-    cycle_counter++;
-
     // Check for pending mode switch
     if (mode_switch_requested_.exchange(false)) {
       perform_mode_switch_async();
     }
 
-    if (send_cycle) {
-      // SEND CYCLE: Read commands from RT thread and send to motors
-      auto cmd = command_buffer_.readFromNonRT();
-      if (cmd && cmd->valid && cmd->mode != ControlMode::UNINITIALIZED) {
-        // Send commands to motors based on current mode
-        if (cmd->mode == ControlMode::MIT) {
-          // Pack MIT commands
-          for (size_t i = 0; i < num_joints_; ++i) {
-            mit_params_[i].q = cmd->positions[i];
-            mit_params_[i].dq = cmd->velocities[i];
-            mit_params_[i].tau = cmd->torques[i];
-            mit_params_[i].kp = config_.mit_kp;
-            mit_params_[i].kd = config_.mit_kd;
-          }
-          // Send MIT commands (batch) using RT-safe method
-          openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_,
-                                         config_.can_timeout_us);
-
-        } else if (cmd->mode == ControlMode::POSITION_VELOCITY) {
-          // Pack position/velocity commands
-          for (size_t i = 0; i < num_joints_; ++i) {
-            posvel_params_[i].position = cmd->positions[i];
-            posvel_params_[i].velocity = cmd->velocities[i];
-          }
-          // Send position/velocity commands (batch) using RT-safe method
-          openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
-                                            config_.can_timeout_us);
+    // SEND: Read commands from RT thread and send to motors
+    auto cmd = command_buffer_.readFromNonRT();
+    if (cmd && cmd->valid && cmd->mode != ControlMode::UNINITIALIZED) {
+      // Send commands to motors based on current mode
+      if (cmd->mode == ControlMode::MIT) {
+        // Pack MIT commands
+        for (size_t i = 0; i < num_joints_; i++) {
+          mit_params_[i].q = cmd->positions[i];
+          mit_params_[i].dq = cmd->velocities[i];
+          mit_params_[i].tau = cmd->torques[i];
+          mit_params_[i].kp = config_.mit_kp;
+          mit_params_[i].kd = config_.mit_kd;
         }
-      } else {
-        // No active controller - send refresh command to get motor states
-        // This uses the special 0x7FF CAN ID to request state feedback
-        openarm_rt_->refresh_all_motors_rt(config_.can_timeout_us);
+        // Send MIT commands (batch) using RT-safe method
+        openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_,
+                                       config_.can_timeout_us);
+
+      } else if (cmd->mode == ControlMode::POSITION_VELOCITY) {
+        // Pack position/velocity commands
+        for (size_t i = 0; i < num_joints_; i++) {
+          posvel_params_[i].q = cmd->positions[i];
+          posvel_params_[i].dq = cmd->velocities[i];
+        }
+        // Send position/velocity commands (batch) using RT-safe method
+        openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
+                                          config_.can_timeout_us);
       }
     } else {
-      // RECEIVE CYCLE: Read states from motors
-      StateData new_state;
-      new_state.valid = false;
+      // No active controller - send refresh command to get motor states
+      // This uses the special 0x7FF CAN ID to request state feedback
+      openarm_rt_->refresh_all_motors_rt(config_.can_timeout_us);
+    }
 
-      // Receive motor states (batch) using RT-safe method
-      std::array<openarm::damiao_motor::StateResult, MAX_JOINTS> motor_states;
-      size_t received = openarm_rt_->receive_states_batch_rt(
-          motor_states.data(), num_joints_, config_.can_timeout_us);
+    // RECEIVE: Read motor responses immediately (motors respond within ~0.5-1ms)
+    StateData new_state;
+    new_state.valid = false;
 
-      if (received > 0) {
-        for (size_t i = 0; i < num_joints_; ++i) {
-          if (motor_states[i].valid) {
-            new_state.positions[i] = motor_states[i].position;
-            new_state.velocities[i] = motor_states[i].velocity;
-            new_state.torques[i] = motor_states[i].torque;
-            new_state.error_codes[i] = motor_states[i].error_code;
-          }
+    // Receive motor states (batch) using RT-safe method
+    std::array<openarm::damiao_motor::StateResult, MAX_JOINTS> motor_states;
+    size_t received = openarm_rt_->receive_states_batch_rt(
+        motor_states.data(), num_joints_, config_.can_timeout_us);
+
+    if (received > 0) {
+      for (size_t i = 0; i < num_joints_; i++) {
+        if (motor_states[i].valid) {
+          new_state.positions[i] = motor_states[i].position;
+          new_state.velocities[i] = motor_states[i].velocity;
+          new_state.torques[i] = motor_states[i].torque;
+          new_state.error_codes[i] = motor_states[i].error_code;
         }
-        new_state.valid = true;
-
-        // Write to RT buffer
-        state_buffer_.writeFromNonRT(new_state);
       }
+      new_state.valid = true;
+
+      // Write to RT buffer
+      state_buffer_.writeFromNonRT(new_state);
     }
 
-    // Sleep to maintain cycle time
-    auto cycle_end = std::chrono::steady_clock::now();
-    auto cycle_duration = cycle_end - cycle_start;
+    // Calculate next cycle time (absolute time prevents drift)
+    next_cycle.tv_nsec += cycle_time_ns;
 
-    if (cycle_duration < cycle_time) {
-      std::this_thread::sleep_until(cycle_start + cycle_time);
-    } else {
-      // Log if we're missing cycles (lower-priority RT thread, so throttled logging is OK)
-      static int missed_cycles = 0;
-      missed_cycles++;
-
-      // Log every 1000 missed cycles with more detail
-      if (missed_cycles % 1000 == 0) {
-        auto duration_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                cycle_duration)
-                .count();
-        RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                    "CAN worker thread missed %d cycles. Last cycle took %ld "
-                    "us (target: 2500 us). %s cycle.",
-                    missed_cycles, duration_us,
-                    send_cycle ? "Send" : "Receive");
-      }
+    // Handle nanosecond overflow
+    while (next_cycle.tv_nsec >= 1000000000L) {
+      next_cycle.tv_sec++;
+      next_cycle.tv_nsec -= 1000000000L;
     }
+
+    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_cycle, nullptr);
   }
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
@@ -726,7 +643,7 @@ bool OpenArm_v10RTHardware::switch_to_mit_mode() {
 
   // Initialize command interfaces with current motor states to avoid jumps
   // This ensures the first MIT command sent will match current state
-  for (size_t i = 0; i < num_joints_; ++i) {
+  for (size_t i = 0; i < num_joints_; i++) {
     pos_commands_[i] = pos_states_[i];
     vel_commands_[i] = vel_states_[i];
     tau_commands_[i] = tau_states_[i];
@@ -774,7 +691,7 @@ bool OpenArm_v10RTHardware::switch_to_position_mode() {
   // Initialize command interfaces with current motor states to avoid jumps
   // This ensures the first Position/Velocity command sent will match current
   // state
-  for (size_t i = 0; i < num_joints_; ++i) {
+  for (size_t i = 0; i < num_joints_; i++) {
     pos_commands_[i] = pos_states_[i];
     vel_commands_[i] = vel_states_[i];
     tau_commands_[i] = tau_states_[i];

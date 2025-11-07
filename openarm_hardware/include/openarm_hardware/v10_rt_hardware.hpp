@@ -18,7 +18,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
-#include <openarm/can/rt_safe_openarm.hpp>
+#include <openarm/realtime/openarm.hpp>
 #include <openarm/damiao_motor/dm_motor.hpp>
 #include <openarm/damiao_motor/dm_motor_control.hpp>
 #include <thread>
@@ -96,7 +96,6 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
   enum class ControlMode { UNINITIALIZED, POSITION_VELOCITY, MIT };
 
  private:
-
   // Configuration
   HardwareConfig config_;
   ControllerConfig controller_config_;
@@ -143,13 +142,8 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
   std::atomic<ControlMode> current_mode_{ControlMode::UNINITIALIZED};
   std::atomic<ControlMode> pending_mode_{ControlMode::UNINITIALIZED};
 
-  // Interface claiming states
-  std::atomic<bool> position_interface_claimed_{false};
-  std::atomic<bool> velocity_interface_claimed_{false};
-  std::atomic<bool> effort_interface_claimed_{false};
-
   // RT-safe OpenArm interface
-  std::unique_ptr<openarm::can::RTSafeOpenArm> openarm_rt_;
+  std::unique_ptr<openarm::realtime::OpenArm> openarm_rt_;
 
   // Lower-priority RT worker thread for CAN communication
   std::thread can_worker_thread_;
