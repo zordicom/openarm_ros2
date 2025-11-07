@@ -287,8 +287,15 @@ hardware_interface::return_type OpenArm_v10RTHardware::read(
 
   // End timing and update stats
   clock_gettime(CLOCK_MONOTONIC, &end);
-  uint64_t duration_ns = (end.tv_sec - start.tv_sec) * 1000000000ULL +
-                         (end.tv_nsec - start.tv_nsec);
+
+  // Handle nanosecond wraparound correctly
+  int64_t sec_diff = end.tv_sec - start.tv_sec;
+  int64_t nsec_diff = end.tv_nsec - start.tv_nsec;
+  if (nsec_diff < 0) {
+    sec_diff--;
+    nsec_diff += 1000000000L;
+  }
+  uint64_t duration_ns = sec_diff * 1000000000ULL + nsec_diff;
 
   rt_stats_.read_count.fetch_add(1, std::memory_order_relaxed);
   rt_stats_.total_read_ns.fetch_add(duration_ns, std::memory_order_relaxed);
@@ -330,8 +337,15 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
 
   // End timing and update stats
   clock_gettime(CLOCK_MONOTONIC, &end);
-  uint64_t duration_ns = (end.tv_sec - start.tv_sec) * 1000000000ULL +
-                         (end.tv_nsec - start.tv_nsec);
+
+  // Handle nanosecond wraparound correctly
+  int64_t sec_diff = end.tv_sec - start.tv_sec;
+  int64_t nsec_diff = end.tv_nsec - start.tv_nsec;
+  if (nsec_diff < 0) {
+    sec_diff--;
+    nsec_diff += 1000000000L;
+  }
+  uint64_t duration_ns = sec_diff * 1000000000ULL + nsec_diff;
 
   rt_stats_.write_count.fetch_add(1, std::memory_order_relaxed);
   rt_stats_.total_write_ns.fetch_add(duration_ns, std::memory_order_relaxed);
@@ -632,9 +646,15 @@ void OpenArm_v10RTHardware::can_worker_loop() {
 
     // Mark cycle end and compute duration
     clock_gettime(CLOCK_MONOTONIC, &cycle_end);
-    uint64_t cycle_duration_ns =
-        (cycle_end.tv_sec - cycle_start.tv_sec) * 1000000000ULL +
-        (cycle_end.tv_nsec - cycle_start.tv_nsec);
+
+    // Handle nanosecond wraparound correctly
+    int64_t sec_diff = cycle_end.tv_sec - cycle_start.tv_sec;
+    int64_t nsec_diff = cycle_end.tv_nsec - cycle_start.tv_nsec;
+    if (nsec_diff < 0) {
+      sec_diff--;
+      nsec_diff += 1000000000L;
+    }
+    uint64_t cycle_duration_ns = sec_diff * 1000000000ULL + nsec_diff;
 
     rt_stats_.worker_cycles.fetch_add(1, std::memory_order_relaxed);
     rt_stats_.total_worker_cycle_ns.fetch_add(cycle_duration_ns,
