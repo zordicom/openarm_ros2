@@ -80,7 +80,8 @@ bool OpenArm_v10HW::parse_config(const hardware_interface::HardwareInfo& info) {
         gripper.kd = std::stod(params.at("kd"));
         gripper.closed_position = std::stod(params.at("closed_position"));
         gripper.open_position = std::stod(params.at("open_position"));
-        gripper.motor_closed_radians = std::stod(params.at("motor_closed_radians"));
+        gripper.motor_closed_radians =
+            std::stod(params.at("motor_closed_radians"));
         gripper.motor_open_radians = std::stod(params.at("motor_open_radians"));
         gripper.max_velocity = std::stod(params.at("max_velocity"));
 
@@ -295,11 +296,12 @@ hardware_interface::CallbackReturn OpenArm_v10HW::on_activate(
   // Initialize gripper command to current position if enabled
   if (config_.gripper_joint.has_value()) {
     size_t gripper_idx = config_.arm_joints.size();
+
     const auto& gripper_motors = openarm_->get_gripper().get_motors();
     if (!gripper_motors.empty()) {
       double motor_pos = gripper_motors[0].get_position();
-      pos_commands_[gripper_idx] = gripper_motor_radians_to_joint(
-          config_.gripper_joint.value(), motor_pos);
+      pos_commands_[gripper_idx] =
+          config_.gripper_joint.value().to_joint(motor_pos);
       vel_commands_[gripper_idx] = 0.0;
       tau_commands_[gripper_idx] = 0.0;
       RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
@@ -386,12 +388,13 @@ hardware_interface::return_type OpenArm_v10HW::read(
       // TODO the mappings are approximates
       // Convert motor position (radians) to joint value
       double motor_pos = gripper_motors[0].get_position();
-      pos_states_[gripper_idx] = gripper_motor_radians_to_joint(
-          config_.gripper_joint.value(), motor_pos);
+      pos_states_[gripper_idx] =
+          config_.gripper_joint.value().to_joint(motor_pos);
 
-      // Unimplemented: Velocity and torque mapping
-      vel_states_[gripper_idx] = 0;  // gripper_motors[0].get_velocity();
-      tau_states_[gripper_idx] = 0;  // gripper_motors[0].get_torque();
+      // Pass through velocity and torque directly
+      // TODO: These may need scaling based on gripper mechanism
+      vel_states_[gripper_idx] = gripper_motors[0].get_velocity();
+      tau_states_[gripper_idx] = gripper_motors[0].get_torque();
     }
   }
 
@@ -448,8 +451,7 @@ hardware_interface::return_type OpenArm_v10HW::write(
     assert(joint_names_.size() == 1 + config_.arm_joints.size());
     // TODO the true mappings are unimplemented.
     size_t idx = config_.arm_joints.size();
-    double motor_command =
-        gripper_joint_to_motor_radians(gripper, pos_commands_[idx]);
+    double motor_command = gripper.to_radians(pos_commands_[idx]);
 
     openarm_->get_gripper().mit_control_all(
         {{gripper.kp, gripper.kd, motor_command, 0, 0}});
@@ -475,7 +477,7 @@ void OpenArm_v10HW::return_to_zero() {
     openarm_->get_gripper().mit_control_all(
         {{gripper.kp, gripper.kd, gripper.closed_position, 0.0, 0.0}});
   }
-  std::this_thread::sleep_for(std::chrono::microseconds(1000));
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   openarm_->recv_all();
 }
 

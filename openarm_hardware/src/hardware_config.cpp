@@ -21,42 +21,53 @@
 
 namespace openarm_hardware {
 
-double gripper_joint_to_motor_radians(const GripperConfig& config,
-                                      double joint_value) {
-  // Linear interpolation: joint [0, 1] -> motor [closed, open] radians
-  return config.motor_closed_radians +
-         joint_value * (config.motor_open_radians - config.motor_closed_radians);
-}
-
-double gripper_motor_radians_to_joint(const GripperConfig& config,
-                                      double motor_radians) {
-  // Inverse mapping: motor radians -> joint [0, 1]
-  double range = config.motor_open_radians - config.motor_closed_radians;
-  if (std::abs(range) < 1e-6) {
-    return 0.0;  // Avoid division by zero
+std::string error_code_to_string(uint8_t error_code) {
+  switch (error_code) {
+    case 0x1:
+      return "No error";
+    case 0x8:
+      return "Overvoltage";
+    case 0x9:
+      return "Undervoltage";
+    case 0xA:
+      return "Overcurrent";
+    case 0xB:
+      return "MOS overtemperature";
+    case 0xC:
+      return "Motor coil overtemperature";
+    case 0xD:
+      return "Communication loss";
+    case 0xE:
+      return "Overload";
+    default:
+      return "Unknown error (0x" + std::to_string(error_code) + ")";
   }
-  return (motor_radians - config.motor_closed_radians) / range;
 }
 
 double GripperConfig::to_radians(double joint_value) const {
+  double range = open_position - closed_position;
+  double motor_range = motor_open_radians - motor_closed_radians;
+
   return motor_closed_radians +
-         joint_value * (motor_open_radians - motor_closed_radians);
+         ((joint_value - closed_position) / range) * motor_range;
 }
 
 double GripperConfig::to_joint(double motor_radians) const {
-  double range = motor_open_radians - motor_closed_radians;
-  if (std::abs(range) < 1e-6) {
-    return 0.0;  // Avoid division by zero
-  }
-  return (motor_radians - motor_closed_radians) / range;
+  double range = open_position - closed_position;
+  double motor_range = motor_open_radians - motor_closed_radians;
+  return closed_position +
+         ((motor_radians - motor_closed_radians) / motor_range) * range;
 }
 
-openarm::damiao_motor::MotorType parse_motor_type_param(const std::string& type_str) {
+openarm::damiao_motor::MotorType parse_motor_type_param(
+    const std::string& type_str) {
   if (type_str == "DM3507") return openarm::damiao_motor::MotorType::DM3507;
   if (type_str == "DM4310") return openarm::damiao_motor::MotorType::DM4310;
-  if (type_str == "DM4310_48V") return openarm::damiao_motor::MotorType::DM4310_48V;
+  if (type_str == "DM4310_48V")
+    return openarm::damiao_motor::MotorType::DM4310_48V;
   if (type_str == "DM4340") return openarm::damiao_motor::MotorType::DM4340;
-  if (type_str == "DM4340_48V") return openarm::damiao_motor::MotorType::DM4340_48V;
+  if (type_str == "DM4340_48V")
+    return openarm::damiao_motor::MotorType::DM4340_48V;
   if (type_str == "DM6006") return openarm::damiao_motor::MotorType::DM6006;
   if (type_str == "DM8006") return openarm::damiao_motor::MotorType::DM8006;
   if (type_str == "DM8009") return openarm::damiao_motor::MotorType::DM8009;
@@ -82,25 +93,6 @@ bool parse_bool_param(const std::string& str) {
   }
 
   throw std::runtime_error("Invalid boolean value: " + str);
-}
-
-std::string error_code_to_string(uint8_t error_code) {
-  switch (error_code) {
-    case 0x00:
-      return "No error";
-    case 0x01:
-      return "Over temperature";
-    case 0x02:
-      return "Over current";
-    case 0x04:
-      return "Over voltage";
-    case 0x08:
-      return "Encoder error";
-    case 0x10:
-      return "Phase current unbalance";
-    default:
-      return "Unknown error";
-  }
 }
 
 }  // namespace openarm_hardware

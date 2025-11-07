@@ -30,22 +30,19 @@ enum class ControlMode {
   TORQUE_POSITION = 4     // Torque-Position mode (not implemented)
 };
 
-/**
- * @brief Configuration for a single motor
- */
+// Configuration for a single motor
 struct MotorConfig {
   std::string name;
   openarm::damiao_motor::MotorType type;
   uint32_t send_can_id;
   uint32_t recv_can_id;
-  double kp;      // Used in MIT mode
-  double kd;      // Used in MIT mode
+  double kp;            // Used in MIT mode
+  double kd;            // Used in MIT mode
   double max_velocity;  // Max velocity for position mode (rad/s)
 };
 
-/**
- * @brief Configuration for the gripper
- */
+// Similar to motor config, but with a few extra parameters to convert between
+// 0,1 joint states to motor radians
 struct GripperConfig {
   std::string name;
   openarm::damiao_motor::MotorType motor_type;
@@ -78,15 +75,14 @@ struct ControllerConfig {
   std::optional<GripperConfig> gripper_joint;
 };
 
-double gripper_joint_to_motor_radians(const GripperConfig& config,
-                                      double joint_value);
-double gripper_motor_radians_to_joint(const GripperConfig& config,
-                                      double motor_radians);
+// Convert motor error code to string.
+std::string error_code_to_string(uint8_t error_code);
 
 // Helper functions for parsing parameters from hardware_interface::HardwareInfo
 
 // Throws std::runtime_error if motor type is unknown
-openarm::damiao_motor::MotorType parse_motor_type_param(const std::string& type_str);
+openarm::damiao_motor::MotorType parse_motor_type_param(
+    const std::string& type_str);
 
 // Accepts: true/false, 1/0, yes/no (case-insensitive)
 // Throws std::runtime_error if parsing fails
