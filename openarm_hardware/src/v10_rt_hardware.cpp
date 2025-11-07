@@ -536,10 +536,13 @@ void OpenArm_v10RTHardware::can_worker_loop() {
   // Set thread name for debugging
   pthread_setname_np(pthread_self(), "can_rw_worker");
 
-  // CAN communication cycle: send commands then immediately receive responses
-  // Rate: 375Hz (2.667ms cycle) for CAN 2.0 1Mbps bus with 8 motors
-  // Bandwidth: 8 motors * 2 frames (TX+RX) * 130 bits * 375Hz = ~780 kbps
-  const int64_t cycle_time_ns = 2666667;  // 2666.667us = 2.667ms = 375Hz
+  // Alternating pattern: send on even cycles, receive on odd cycles
+  // This gives motors time to process commands before reading responses
+  // Cycle time: 1600us = 625Hz base rate (but 312.5Hz effective per direction)
+  const int64_t cycle_time_ns = 1600000;  // 1600us = 1.6ms = 625Hz
+
+  // Cycle counter for alternating pattern
+  uint32_t cycle_counter = 0;
 
   // Get initial cycle start time using RT-safe monotonic clock
   struct timespec next_cycle, cycle_start, cycle_end;
@@ -548,79 +551,86 @@ void OpenArm_v10RTHardware::can_worker_loop() {
   while (worker_running_) {
     // Mark cycle start
     clock_gettime(CLOCK_MONOTONIC, &cycle_start);
+
+    // Alternate between sending and receiving to reduce CAN bus load
+    bool send_cycle = (cycle_counter % 2 == 0);
+    cycle_counter++;
+
     // Check for pending mode switch
     if (mode_switch_requested_.exchange(false)) {
       perform_mode_switch_async();
     }
 
-    // SEND: Read commands from RT thread and send to motors
-    auto cmd = command_buffer_.readFromNonRT();
-    if (cmd && cmd->valid && cmd->mode != ControlMode::UNINITIALIZED) {
-      // Send commands to motors based on current mode
-      size_t sent = 0;
-      if (cmd->mode == ControlMode::MIT) {
-        // Pack MIT commands
-        for (size_t i = 0; i < num_joints_; i++) {
-          mit_params_[i].q = cmd->positions[i];
-          mit_params_[i].dq = cmd->velocities[i];
-          mit_params_[i].tau = cmd->torques[i];
-          mit_params_[i].kp = controller_config_.arm_joints[i].kp;
-          mit_params_[i].kd = controller_config_.arm_joints[i].kd;
-        }
-        // Send MIT commands (batch) using RT-safe method
-        sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_,
-                                              config_.can_timeout_us);
+    if (send_cycle) {
+      // SEND CYCLE: Read commands from RT thread and send to motors
+      auto cmd = command_buffer_.readFromNonRT();
+      if (cmd && cmd->valid && cmd->mode != ControlMode::UNINITIALIZED) {
+        // Send commands to motors based on current mode
+        size_t sent = 0;
+        if (cmd->mode == ControlMode::MIT) {
+          // Pack MIT commands
+          for (size_t i = 0; i < num_joints_; i++) {
+            mit_params_[i].q = cmd->positions[i];
+            mit_params_[i].dq = cmd->velocities[i];
+            mit_params_[i].tau = cmd->torques[i];
+            mit_params_[i].kp = controller_config_.arm_joints[i].kp;
+            mit_params_[i].kd = controller_config_.arm_joints[i].kd;
+          }
+          // Send MIT commands (batch) using RT-safe method
+          sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_,
+                                                config_.can_timeout_us);
 
-      } else if (cmd->mode == ControlMode::POSITION_VELOCITY) {
-        // Pack position/velocity commands
-        for (size_t i = 0; i < num_joints_; i++) {
-          posvel_params_[i].q = cmd->positions[i];
-          posvel_params_[i].dq = cmd->velocities[i];
+        } else if (cmd->mode == ControlMode::POSITION_VELOCITY) {
+          // Pack position/velocity commands
+          for (size_t i = 0; i < num_joints_; i++) {
+            posvel_params_[i].q = cmd->positions[i];
+            posvel_params_[i].dq = cmd->velocities[i];
+          }
+          // Send position/velocity commands (batch) using RT-safe method
+          sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
+                                                   config_.can_timeout_us);
         }
-        // Send position/velocity commands (batch) using RT-safe method
-        sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
-                                                 config_.can_timeout_us);
-      }
 
-      // Track dropped frames (TX buffer full)
-      if (sent < num_joints_) {
-        rt_stats_.tx_dropped.fetch_add(num_joints_ - sent,
-                                       std::memory_order_relaxed);
+        // Track dropped frames (TX buffer full)
+        if (sent < num_joints_) {
+          rt_stats_.tx_dropped.fetch_add(num_joints_ - sent,
+                                         std::memory_order_relaxed);
+        }
+      } else {
+        // No active controller - send refresh command to get motor states
+        // This uses the special 0x7FF CAN ID to request state feedback
+        openarm_rt_->refresh_all_motors_rt(config_.can_timeout_us);
       }
     } else {
-      // No active controller - send refresh command to get motor states
-      // This uses the special 0x7FF CAN ID to request state feedback
-      openarm_rt_->refresh_all_motors_rt(config_.can_timeout_us);
-    }
+      // RECEIVE CYCLE: Read states from motors
+      StateData new_state;
+      new_state.valid = false;
 
-    // RECEIVE: Read motor responses immediately (motors respond within ~0.5-1ms)
-    StateData new_state;
-    new_state.valid = false;
+      // Receive motor states (batch) using RT-safe method
+      std::array<openarm::damiao_motor::StateResult, MAX_JOINTS> motor_states;
+      size_t received = openarm_rt_->receive_states_batch_rt(
+          motor_states.data(), num_joints_, config_.can_timeout_us);
 
-    // Receive motor states (batch) using RT-safe method
-    std::array<openarm::damiao_motor::StateResult, MAX_JOINTS> motor_states;
-    size_t received = openarm_rt_->receive_states_batch_rt(
-        motor_states.data(), num_joints_, config_.can_timeout_us);
-
-    // Track missing feedback frames (RX buffer empty or frames lost)
-    if (received < num_joints_) {
-      rt_stats_.rx_dropped.fetch_add(num_joints_ - received,
-                                     std::memory_order_relaxed);
-    }
-
-    if (received > 0) {
-      for (size_t i = 0; i < num_joints_; i++) {
-        if (motor_states[i].valid) {
-          new_state.positions[i] = motor_states[i].position;
-          new_state.velocities[i] = motor_states[i].velocity;
-          new_state.torques[i] = motor_states[i].torque;
-          new_state.error_codes[i] = motor_states[i].error_code;
-        }
+      // Track missing feedback frames (RX buffer empty or frames lost)
+      if (received < num_joints_) {
+        rt_stats_.rx_dropped.fetch_add(num_joints_ - received,
+                                       std::memory_order_relaxed);
       }
-      new_state.valid = true;
 
-      // Write to RT buffer
-      state_buffer_.writeFromNonRT(new_state);
+      if (received > 0) {
+        for (size_t i = 0; i < num_joints_; i++) {
+          if (motor_states[i].valid) {
+            new_state.positions[i] = motor_states[i].position;
+            new_state.velocities[i] = motor_states[i].velocity;
+            new_state.torques[i] = motor_states[i].torque;
+            new_state.error_codes[i] = motor_states[i].error_code;
+          }
+        }
+        new_state.valid = true;
+
+        // Write to RT buffer
+        state_buffer_.writeFromNonRT(new_state);
+      }
     }
 
     // Mark cycle end and compute duration
