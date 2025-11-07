@@ -30,4 +30,12 @@
       Supports both MIT mode (effort interface) and Position-Velocity mode (position interface).
     </description>
   </class>
+  <class name="openarm_hardware/OpenArm_v10RTHardware"
+         type="openarm_hardware::OpenArm_v10RTHardware"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      RT-safe dual-mode hardware interface for OpenArm V10 using lower-priority worker thread.
+      Supports both MIT mode (effort interface) and Position-Velocity mode (position interface).
+    </description>
+  </class>
 </library>
