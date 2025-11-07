@@ -145,6 +145,28 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
   std::thread can_worker_thread_;
   std::atomic<bool> worker_running_{false};
 
+  // RT performance statistics
+  struct RTStats {
+    std::atomic<uint64_t> max_read_ns{0};
+    std::atomic<uint64_t> max_write_ns{0};
+    std::atomic<uint64_t> max_worker_cycle_ns{0};
+    std::atomic<uint64_t> worker_deadline_misses{0};
+    std::atomic<uint64_t> read_count{0};
+    std::atomic<uint64_t> write_count{0};
+    std::atomic<uint64_t> worker_cycles{0};
+    std::atomic<uint64_t> tx_dropped{0};  // Frames dropped due to TX buffer full
+    std::atomic<uint64_t> rx_dropped{0};  // Frames not received (missing feedback)
+    // Running averages (stored as sum for lock-free updates)
+    std::atomic<uint64_t> total_read_ns{0};
+    std::atomic<uint64_t> total_write_ns{0};
+    std::atomic<uint64_t> total_worker_cycle_ns{0};
+  };
+  RTStats rt_stats_;
+
+  // Stats logging
+  std::chrono::steady_clock::time_point last_stats_log_;
+  static constexpr int STATS_LOG_INTERVAL_SEC = 10;  // Log stats every 10 seconds
+
   // RT-safe logging (using throttled macros)
   static constexpr int LOG_THROTTLE_MS = 1000;  // Log at most once per second
 
@@ -168,6 +190,9 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
   // Determine control mode from interfaces
   ControlMode determine_mode_from_interfaces(
       const std::vector<std::string>& interfaces);
+
+  // Log RT performance statistics (called periodically from worker thread)
+  void log_rt_stats();
 };
 
 }  // namespace openarm_hardware

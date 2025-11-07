@@ -38,6 +38,9 @@ OpenArm_v10RTHardware::OpenArm_v10RTHardware() {
   // Pre-allocate command and state buffers
   command_buffer_.writeFromNonRT(CommandData{});
   state_buffer_.writeFromNonRT(StateData{});
+
+  // Initialize stats logging timestamp
+  last_stats_log_ = std::chrono::steady_clock::now();
 }
 
 OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_init(
@@ -257,6 +260,10 @@ OpenArm_v10RTHardware::export_command_interfaces() {
 
 hardware_interface::return_type OpenArm_v10RTHardware::read(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
+  // Start timing
+  struct timespec start, end;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+
   // This is called from RT context - just copy from the realtime buffer
   auto state = state_buffer_.readFromRT();
 
@@ -278,11 +285,30 @@ hardware_interface::return_type OpenArm_v10RTHardware::read(
     }
   }
 
+  // End timing and update stats
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  uint64_t duration_ns = (end.tv_sec - start.tv_sec) * 1000000000ULL +
+                         (end.tv_nsec - start.tv_nsec);
+
+  rt_stats_.read_count.fetch_add(1, std::memory_order_relaxed);
+  rt_stats_.total_read_ns.fetch_add(duration_ns, std::memory_order_relaxed);
+
+  // Update max (lock-free)
+  uint64_t current_max = rt_stats_.max_read_ns.load(std::memory_order_relaxed);
+  while (duration_ns > current_max &&
+         !rt_stats_.max_read_ns.compare_exchange_weak(current_max, duration_ns,
+                                                       std::memory_order_relaxed)) {
+  }
+
   return hardware_interface::return_type::OK;
 }
 
 hardware_interface::return_type OpenArm_v10RTHardware::write(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
+  // Start timing
+  struct timespec start, end;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+
   // This is called from RT context - just write to the realtime buffer
   CommandData cmd;
   cmd.mode = current_mode_.load();
@@ -301,6 +327,21 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
   }
 
   command_buffer_.writeFromNonRT(cmd);
+
+  // End timing and update stats
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  uint64_t duration_ns = (end.tv_sec - start.tv_sec) * 1000000000ULL +
+                         (end.tv_nsec - start.tv_nsec);
+
+  rt_stats_.write_count.fetch_add(1, std::memory_order_relaxed);
+  rt_stats_.total_write_ns.fetch_add(duration_ns, std::memory_order_relaxed);
+
+  // Update max (lock-free)
+  uint64_t current_max = rt_stats_.max_write_ns.load(std::memory_order_relaxed);
+  while (duration_ns > current_max &&
+         !rt_stats_.max_write_ns.compare_exchange_weak(current_max, duration_ns,
+                                                        std::memory_order_relaxed)) {
+  }
 
   return hardware_interface::return_type::OK;
 }
@@ -501,10 +542,12 @@ void OpenArm_v10RTHardware::can_worker_loop() {
   const int64_t cycle_time_ns = 2666667;  // 2666.667us = 2.667ms = 375Hz
 
   // Get initial cycle start time using RT-safe monotonic clock
-  struct timespec next_cycle;
+  struct timespec next_cycle, cycle_start, cycle_end;
   clock_gettime(CLOCK_MONOTONIC, &next_cycle);
 
   while (worker_running_) {
+    // Mark cycle start
+    clock_gettime(CLOCK_MONOTONIC, &cycle_start);
     // Check for pending mode switch
     if (mode_switch_requested_.exchange(false)) {
       perform_mode_switch_async();
@@ -514,6 +557,7 @@ void OpenArm_v10RTHardware::can_worker_loop() {
     auto cmd = command_buffer_.readFromNonRT();
     if (cmd && cmd->valid && cmd->mode != ControlMode::UNINITIALIZED) {
       // Send commands to motors based on current mode
+      size_t sent = 0;
       if (cmd->mode == ControlMode::MIT) {
         // Pack MIT commands
         for (size_t i = 0; i < num_joints_; i++) {
@@ -524,8 +568,8 @@ void OpenArm_v10RTHardware::can_worker_loop() {
           mit_params_[i].kd = controller_config_.arm_joints[i].kd;
         }
         // Send MIT commands (batch) using RT-safe method
-        openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_,
-                                       config_.can_timeout_us);
+        sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_,
+                                              config_.can_timeout_us);
 
       } else if (cmd->mode == ControlMode::POSITION_VELOCITY) {
         // Pack position/velocity commands
@@ -534,8 +578,14 @@ void OpenArm_v10RTHardware::can_worker_loop() {
           posvel_params_[i].dq = cmd->velocities[i];
         }
         // Send position/velocity commands (batch) using RT-safe method
-        openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
-                                          config_.can_timeout_us);
+        sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
+                                                 config_.can_timeout_us);
+      }
+
+      // Track dropped frames (TX buffer full)
+      if (sent < num_joints_) {
+        rt_stats_.tx_dropped.fetch_add(num_joints_ - sent,
+                                       std::memory_order_relaxed);
       }
     } else {
       // No active controller - send refresh command to get motor states
@@ -552,6 +602,12 @@ void OpenArm_v10RTHardware::can_worker_loop() {
     size_t received = openarm_rt_->receive_states_batch_rt(
         motor_states.data(), num_joints_, config_.can_timeout_us);
 
+    // Track missing feedback frames (RX buffer empty or frames lost)
+    if (received < num_joints_) {
+      rt_stats_.rx_dropped.fetch_add(num_joints_ - received,
+                                     std::memory_order_relaxed);
+    }
+
     if (received > 0) {
       for (size_t i = 0; i < num_joints_; i++) {
         if (motor_states[i].valid) {
@@ -565,6 +621,39 @@ void OpenArm_v10RTHardware::can_worker_loop() {
 
       // Write to RT buffer
       state_buffer_.writeFromNonRT(new_state);
+    }
+
+    // Mark cycle end and compute duration
+    clock_gettime(CLOCK_MONOTONIC, &cycle_end);
+    uint64_t cycle_duration_ns =
+        (cycle_end.tv_sec - cycle_start.tv_sec) * 1000000000ULL +
+        (cycle_end.tv_nsec - cycle_start.tv_nsec);
+
+    rt_stats_.worker_cycles.fetch_add(1, std::memory_order_relaxed);
+    rt_stats_.total_worker_cycle_ns.fetch_add(cycle_duration_ns,
+                                              std::memory_order_relaxed);
+
+    // Update max (lock-free)
+    uint64_t current_max =
+        rt_stats_.max_worker_cycle_ns.load(std::memory_order_relaxed);
+    while (cycle_duration_ns > current_max &&
+           !rt_stats_.max_worker_cycle_ns.compare_exchange_weak(
+               current_max, cycle_duration_ns, std::memory_order_relaxed)) {
+    }
+
+    // Check for deadline miss (cycle took longer than allocated time)
+    if (cycle_duration_ns > static_cast<uint64_t>(cycle_time_ns)) {
+      rt_stats_.worker_deadline_misses.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    // Periodically log RT stats (non-RT safe, but low priority thread)
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                       now - last_stats_log_)
+                       .count();
+    if (elapsed >= STATS_LOG_INTERVAL_SEC) {
+      log_rt_stats();
+      last_stats_log_ = now;
     }
 
     // Calculate next cycle time (absolute time prevents drift)
@@ -741,6 +830,82 @@ ControlMode OpenArm_v10RTHardware::determine_mode_from_interfaces(
 
   // Invalid or unclear combination
   return ControlMode::UNINITIALIZED;
+}
+
+void OpenArm_v10RTHardware::log_rt_stats() {
+  // Load all stats atomically
+  uint64_t read_count = rt_stats_.read_count.load(std::memory_order_relaxed);
+  uint64_t write_count = rt_stats_.write_count.load(std::memory_order_relaxed);
+  uint64_t worker_cycles =
+      rt_stats_.worker_cycles.load(std::memory_order_relaxed);
+
+  uint64_t max_read_ns = rt_stats_.max_read_ns.load(std::memory_order_relaxed);
+  uint64_t max_write_ns =
+      rt_stats_.max_write_ns.load(std::memory_order_relaxed);
+  uint64_t max_worker_ns =
+      rt_stats_.max_worker_cycle_ns.load(std::memory_order_relaxed);
+
+  uint64_t total_read_ns =
+      rt_stats_.total_read_ns.load(std::memory_order_relaxed);
+  uint64_t total_write_ns =
+      rt_stats_.total_write_ns.load(std::memory_order_relaxed);
+  uint64_t total_worker_ns =
+      rt_stats_.total_worker_cycle_ns.load(std::memory_order_relaxed);
+
+  uint64_t deadline_misses =
+      rt_stats_.worker_deadline_misses.load(std::memory_order_relaxed);
+  uint64_t tx_dropped =
+      rt_stats_.tx_dropped.load(std::memory_order_relaxed);
+  uint64_t rx_dropped =
+      rt_stats_.rx_dropped.load(std::memory_order_relaxed);
+
+  // Calculate averages
+  double avg_read_us =
+      read_count > 0 ? (total_read_ns / static_cast<double>(read_count)) / 1000.0
+                     : 0.0;
+  double avg_write_us = write_count > 0
+                            ? (total_write_ns / static_cast<double>(write_count)) /
+                                  1000.0
+                            : 0.0;
+  double avg_worker_us =
+      worker_cycles > 0
+          ? (total_worker_ns / static_cast<double>(worker_cycles)) / 1000.0
+          : 0.0;
+
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "=== RT Performance Stats ===");
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "Main RT thread (read/write):");
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "  read():  count=%lu, avg=%.2f us, max=%.2f us", read_count,
+              avg_read_us, max_read_ns / 1000.0);
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "  write(): count=%lu, avg=%.2f us, max=%.2f us", write_count,
+              avg_write_us, max_write_ns / 1000.0);
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "CAN worker thread:");
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "  cycles=%lu, avg=%.2f us, max=%.2f us, deadline_misses=%lu",
+              worker_cycles, avg_worker_us, max_worker_ns / 1000.0,
+              deadline_misses);
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "  tx_dropped=%lu (TX buffer full)", tx_dropped);
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "  rx_dropped=%lu (missing feedback)", rx_dropped);
+
+  if (deadline_misses > 0) {
+    RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                "  WARNING: %lu deadline misses detected (%.2f%%)", deadline_misses,
+                100.0 * deadline_misses / static_cast<double>(worker_cycles));
+  }
+  if (tx_dropped > 0) {
+    RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                "  WARNING: %lu TX frames dropped (CAN TX buffer full)", tx_dropped);
+  }
+  if (rx_dropped > 0) {
+    RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                "  WARNING: %lu RX frames missing (no feedback received)", rx_dropped);
+  }
 }
 
 }  // namespace openarm_hardware
