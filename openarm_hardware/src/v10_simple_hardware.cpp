@@ -14,8 +14,6 @@
 
 #include "openarm_hardware/v10_simple_hardware.hpp"
 
-#include <yaml-cpp/yaml.h>
-
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -23,7 +21,6 @@
 #include <vector>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
-#include "openarm_hardware/config_yaml.hpp"
 #include "openarm_hardware/hardware_config.hpp"
 #include "rclcpp/logging.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -33,71 +30,109 @@ namespace openarm_hardware {
 OpenArm_v10HW::OpenArm_v10HW() = default;
 
 bool OpenArm_v10HW::parse_config(const hardware_interface::HardwareInfo& info) {
-  // Parse motor config file path if provided
-  auto it = info.hardware_parameters.find("motor_config_file");
-  if (it == info.hardware_parameters.end() || it->second.empty()) {
-    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
-                 "motor_config_file not provided");
-    return false;
-  }
-
-  motor_config_file_ = it->second;
-  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
-              "Motor config file specified: %s", motor_config_file_.c_str());
-
-  return true;
-}
-
-bool OpenArm_v10HW::load_motor_config_from_yaml(const std::string& yaml_file) {
   try {
-    YAML::Node yaml_config = YAML::LoadFile(yaml_file);
-    config_ = yaml_config.as<ControllerConfig>();
-
-    // Also set CAN interface and FD from the config
-    if (!config_.can_iface.empty()) {
-      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
-                  "Loaded configuration from %s", yaml_file.c_str());
-      return true;
-    } else {
+    // Parse CAN interface settings from hardware parameters
+    auto it = info.hardware_parameters.find("can_interface");
+    if (it == info.hardware_parameters.end() || it->second.empty()) {
       RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
-                   "Invalid configuration: missing can_iface");
+                   "Required parameter 'can_interface' not provided");
       return false;
     }
+    config_.can_iface = it->second;
+
+    it = info.hardware_parameters.find("can_fd");
+    if (it != info.hardware_parameters.end()) {
+      config_.can_fd = parse_bool_param(it->second);
+    } else {
+      config_.can_fd = false;  // Default to false if not specified
+    }
+
+    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
+                "CAN interface: %s, CAN-FD: %s", config_.can_iface.c_str(),
+                config_.can_fd ? "enabled" : "disabled");
+
+    // Parse joint-level parameters
+    for (const auto& joint : info.joints) {
+      const auto& params = joint.parameters;
+
+      // Check if this is a gripper joint
+      auto is_gripper_it = params.find("is_gripper");
+      bool is_gripper = (is_gripper_it != params.end()) &&
+                        parse_bool_param(is_gripper_it->second);
+
+      if (is_gripper) {
+        // Parse gripper configuration
+        GripperConfig gripper;
+        gripper.name = joint.name;
+
+        auto motor_type_it = params.find("motor_type");
+        if (motor_type_it == params.end()) {
+          RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
+                       "Gripper joint '%s' missing 'motor_type' parameter",
+                       joint.name.c_str());
+          return false;
+        }
+        gripper.motor_type = parse_motor_type_param(motor_type_it->second);
+
+        gripper.send_can_id = std::stoul(params.at("send_can_id"), nullptr, 0);
+        gripper.recv_can_id = std::stoul(params.at("recv_can_id"), nullptr, 0);
+        gripper.kp = std::stod(params.at("kp"));
+        gripper.kd = std::stod(params.at("kd"));
+        gripper.closed_position = std::stod(params.at("closed_position"));
+        gripper.open_position = std::stod(params.at("open_position"));
+        gripper.motor_closed_radians =
+            std::stod(params.at("motor_closed_radians"));
+        gripper.motor_open_radians = std::stod(params.at("motor_open_radians"));
+        gripper.max_velocity = std::stod(params.at("max_velocity"));
+
+        config_.gripper_joint = gripper;
+
+        RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
+                    "Configured gripper joint: %s", joint.name.c_str());
+      } else {
+        // Parse arm joint configuration
+        MotorConfig motor;
+        motor.name = joint.name;
+
+        auto motor_type_it = params.find("motor_type");
+        if (motor_type_it == params.end()) {
+          RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
+                       "Arm joint '%s' missing 'motor_type' parameter",
+                       joint.name.c_str());
+          return false;
+        }
+        motor.type = parse_motor_type_param(motor_type_it->second);
+
+        motor.send_can_id = std::stoul(params.at("send_can_id"), nullptr, 0);
+        motor.recv_can_id = std::stoul(params.at("recv_can_id"), nullptr, 0);
+        motor.kp = std::stod(params.at("kp"));
+        motor.kd = std::stod(params.at("kd"));
+        motor.max_velocity = std::stod(params.at("max_velocity"));
+
+        config_.arm_joints.push_back(motor);
+
+        RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
+                    "Configured arm joint: %s", joint.name.c_str());
+      }
+    }
+
+    if (config_.arm_joints.empty()) {
+      RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
+                   "No arm joints configured");
+      return false;
+    }
+
+    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
+                "Configured %zu arm joints and %s gripper",
+                config_.arm_joints.size(),
+                config_.gripper_joint.has_value() ? "1" : "0");
+
+    return true;
   } catch (const std::exception& e) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
-                 "Failed to load config from %s: %s", yaml_file.c_str(),
-                 e.what());
+                 "Failed to parse configuration: %s", e.what());
     return false;
   }
-}
-
-bool OpenArm_v10HW::generate_joint_names() {
-  joint_names_.clear();
-
-  // Add arm joint names from configs
-  if (config_.arm_joints.empty()) {
-    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10HW"),
-                 "No arm configurations specified");
-    return false;
-  }
-
-  for (const auto& motor : config_.arm_joints) {
-    joint_names_.push_back(motor.name);
-    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"), "Added arm joint: %s",
-                motor.name.c_str());
-  }
-
-  // Add gripper joint name if configured
-  if (config_.gripper_joint.has_value()) {
-    joint_names_.push_back(config_.gripper_joint->name);
-    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"), "Added gripper joint: %s",
-                config_.gripper_joint->name.c_str());
-  }
-
-  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10HW"),
-              "Total %zu joints configured", joint_names_.size());
-
-  return true;
 }
 
 hardware_interface::CallbackReturn OpenArm_v10HW::on_init(
@@ -107,19 +142,18 @@ hardware_interface::CallbackReturn OpenArm_v10HW::on_init(
     return CallbackReturn::ERROR;
   }
 
-  // Parse configuration
+  // Parse configuration from hardware_interface info
   if (!parse_config(info)) {
     return CallbackReturn::ERROR;
   }
 
-  // Load motor configuration from YAML
-  if (!load_motor_config_from_yaml(motor_config_file_)) {
-    return CallbackReturn::ERROR;
+  // Build joint names vector from config
+  joint_names_.clear();
+  for (const auto& motor : config_.arm_joints) {
+    joint_names_.push_back(motor.name);
   }
-
-  // Generate joint names based on configuration
-  if (!generate_joint_names()) {
-    return CallbackReturn::ERROR;
+  if (config_.gripper_joint.has_value()) {
+    joint_names_.push_back(config_.gripper_joint->name);
   }
 
   // Log the joint count
@@ -168,7 +202,7 @@ hardware_interface::CallbackReturn OpenArm_v10HW::on_init(
                                  gripper.recv_can_id);
   }
 
-  // Initialize state and command vectors based on generated joint count
+  // Initialize state and command vectors
   const size_t total_joints = joint_names_.size();
   pos_commands_.resize(total_joints, 0.0);
   vel_commands_.resize(total_joints, 0.0);
