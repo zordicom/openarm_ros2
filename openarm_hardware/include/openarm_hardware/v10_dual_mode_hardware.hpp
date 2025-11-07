@@ -14,8 +14,6 @@
 
 #pragma once
 
-#include <yaml-cpp/yaml.h>
-
 #include <chrono>
 #include <fstream>
 #include <memory>
@@ -35,18 +33,6 @@
 #include "rclcpp_lifecycle/state.hpp"
 
 namespace openarm_hardware {
-
-/**
- * @brief Control mode for motors
- * Based on DM motor control modes
- */
-enum class ControlMode {
-  UNINITIALIZED = -1,
-  MIT = 1,            // MIT mode (torque/impedance control)
-  POSITION_VELOCITY = 2,  // Position-Velocity mode (0x100 + ID frame)
-  VELOCITY = 3,       // Velocity mode (not implemented)
-  TORQUE_POSITION = 4 // Torque-Position mode (not implemented)
-};
 
 /**
  * @brief Dual-mode OpenArm V10 Hardware Interface

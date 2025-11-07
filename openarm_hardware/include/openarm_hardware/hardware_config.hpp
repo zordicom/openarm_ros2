@@ -21,6 +21,15 @@
 
 namespace openarm_hardware {
 
+// Based on DM motor control modes
+enum class ControlMode {
+  UNINITIALIZED = -1,
+  MIT = 1,                // MIT mode (torque/impedance control)
+  POSITION_VELOCITY = 2,  // Position-Velocity mode (0x100 + ID frame)
+  VELOCITY = 3,           // Velocity mode (not implemented)
+  TORQUE_POSITION = 4     // Torque-Position mode (not implemented)
+};
+
 /**
  * @brief Configuration for a single motor
  */
@@ -49,6 +58,12 @@ struct GripperConfig {
   double motor_closed_radians;
   double motor_open_radians;
   double max_velocity;  // Max velocity for position mode
+
+  // Maps joint [0, 1] to motor radians
+  double to_radians(double joint_value) const;
+
+  // Maps motor radians to joint [0, 1]
+  double to_joint(double motor_radians) const;
 };
 
 struct ControllerConfig {
@@ -67,5 +82,16 @@ double gripper_joint_to_motor_radians(const GripperConfig& config,
                                       double joint_value);
 double gripper_motor_radians_to_joint(const GripperConfig& config,
                                       double motor_radians);
+
+// Helper functions for parsing parameters from hardware_interface::HardwareInfo
+
+// Throws std::runtime_error if motor type is unknown
+openarm::damiao_motor::MotorType parse_motor_type_param(const std::string& type_str);
+
+// Accepts: true/false, 1/0, yes/no (case-insensitive)
+// Throws std::runtime_error if parsing fails
+bool parse_bool_param(const std::string& str);
+
+std::string error_code_to_string(uint8_t error_code);
 
 }  // namespace openarm_hardware
