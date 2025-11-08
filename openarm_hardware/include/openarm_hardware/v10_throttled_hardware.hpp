@@ -115,7 +115,7 @@ class OpenArm_v10ThrottledHardware : public hardware_interface::SystemInterface 
 
   // Throttling for CAN writes (reads are always non-blocking)
   std::chrono::steady_clock::time_point last_can_write_;
-  static constexpr int64_t CAN_WRITE_INTERVAL_US = 3200;  // 312.5 Hz
+  static constexpr int64_t CAN_WRITE_INTERVAL_US = 2800;  // ~357 Hz (writes every controller cycle)
 
   // Performance stats
   struct Stats {
