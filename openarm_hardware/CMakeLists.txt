@@ -34,6 +34,7 @@ add_library(${PROJECT_NAME} SHARED
   src/hardware_config.cpp
   src/v10_simple_hardware.cpp
   src/v10_rt_hardware.cpp
+  src/v10_throttled_hardware.cpp
 )
 
 target_include_directories(

@@ -38,4 +38,13 @@
       Supports both MIT mode (effort interface) and Position-Velocity mode (position interface).
     </description>
   </class>
+  <class name="openarm_hardware/OpenArm_v10ThrottledHardware"
+         type="openarm_hardware::OpenArm_v10ThrottledHardware"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      Simplified throttled hardware interface for OpenArm V10.
+      No worker threads - throttles CAN writes in write() and always-reads in read().
+      Supports both MIT mode (effort interface) and Position-Velocity mode (position interface).
+    </description>
+  </class>
 </library>
