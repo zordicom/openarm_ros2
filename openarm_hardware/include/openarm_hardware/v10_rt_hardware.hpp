@@ -18,7 +18,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
-#include <openarm/can/rt_safe_openarm.hpp>
+#include <openarm/realtime/openarm.hpp>
 #include <openarm/damiao_motor/dm_motor.hpp>
 #include <openarm/damiao_motor/dm_motor_control.hpp>
 #include <thread>
@@ -147,7 +147,7 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
   std::atomic<bool> effort_interface_claimed_{false};
 
   // RT-safe OpenArm interface
-  std::unique_ptr<openarm::can::RTSafeOpenArm> openarm_rt_;
+  std::unique_ptr<openarm::realtime::OpenArm> openarm_rt_;
 
   // Non-RT worker thread for CAN communication
   std::thread can_worker_thread_;

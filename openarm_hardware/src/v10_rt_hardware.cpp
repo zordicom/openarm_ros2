@@ -94,7 +94,7 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_configure(
   }
 
   // Create RT-safe OpenArm interface
-  openarm_rt_ = std::make_unique<openarm::can::RTSafeOpenArm>();
+  openarm_rt_ = std::make_unique<openarm::realtime::OpenArm>();
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
               "Initializing CAN interface: %s", config_.can_interface.c_str());
@@ -788,8 +788,8 @@ void OpenArm_v10RTHardware::can_worker_loop() {
         } else if (cmd->mode == ControlMode::POSITION_VELOCITY) {
           // Pack position/velocity commands
           for (size_t i = 0; i < num_joints_; ++i) {
-            posvel_params_[i].position = cmd->positions[i];
-            posvel_params_[i].velocity = cmd->velocities[i];
+            posvel_params_[i].q = cmd->positions[i];
+            posvel_params_[i].dq = cmd->velocities[i];
           }
           // Send position/velocity commands (batch) using RT-safe method
           size_t sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,

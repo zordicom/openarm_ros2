@@ -492,21 +492,6 @@ hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_activate(
     }
   }
 
-  // Enable CSV logging if enabled in configuration
-  if (config_.enable_csv_logging) {
-    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                "Enabling CSV logging to USER_WS/openarm_can_logs");
-    openarm_->get_arm().enable_csv_logging("", "openarm_hardware");
-
-    // Initialize command log with current motor states so CSV logging has data
-    // from the start
-    for (size_t i = 0; i < arm_motors.size(); ++i) {
-      const auto& motor_config = config_.arm_joints[i];
-      openarm_->get_arm().init_command_log(i, "REFRESH", motor_config.kp,
-                                           motor_config.kd, pos_commands_[i],
-                                           vel_commands_[i], tau_commands_[i]);
-    }
-  }
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
               "Hardware activated, commands initialized from current state");
@@ -517,13 +502,6 @@ hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_activate(
 hardware_interface::CallbackReturn OpenArm_v10DualModeHW::on_deactivate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"), "Deactivating...");
-
-  // Disable CSV logging if it was enabled
-  if (config_.enable_csv_logging) {
-    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10DualModeHW"),
-                "Disabling CSV logging");
-    openarm_->get_arm().disable_csv_logging();
-  }
 
   return_to_zero();
   openarm_->disable_all();
@@ -574,11 +552,6 @@ hardware_interface::return_type OpenArm_v10DualModeHW::read(
       vel_states_[gripper_idx] = 0;
       tau_states_[gripper_idx] = 0;
     }
-  }
-
-  // Log motor states to CSV if logging is enabled
-  if (config_.enable_csv_logging) {
-    openarm_->get_arm().log_motor_states();
   }
 
   return hardware_interface::return_type::OK;

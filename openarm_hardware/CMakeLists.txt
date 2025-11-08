@@ -45,7 +45,7 @@ target_include_directories(
 
 target_link_libraries(${PROJECT_NAME}
   OpenArmCAN::openarm_can
-  OpenArmCAN::rt_safe_can
+  OpenArmCAN::openarm_can_realtime
   yaml-cpp
   pthread
 )
