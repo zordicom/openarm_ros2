@@ -197,8 +197,9 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::read(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& period) {
   stats_.read_count++;
 
-  // Use controller period as timeout (convert to microseconds)
-  int timeout_us = static_cast<int>(period.seconds() * 1e6);
+  // Use minimal timeout for non-blocking read
+  // We only read if data is immediately available from previous write()
+  int timeout_us = 100;  // Just enough time to read if data is available
 
   // Determine how many motors to receive from (arm + optionally gripper)
   size_t num_arm_joints = controller_config_.arm_joints.size();
