@@ -107,6 +107,9 @@ class OpenArm_v10ThrottledHardware : public hardware_interface::SystemInterface 
   // Control mode management
   ControlMode current_mode_{ControlMode::UNINITIALIZED};
 
+  // Interface claiming state
+  bool gripper_claimed_{false};
+
   // RT-safe OpenArm interface
   std::unique_ptr<openarm::realtime::OpenArm> openarm_rt_;
 

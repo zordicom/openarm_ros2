@@ -61,9 +61,10 @@ OpenArm_v10ThrottledHardware::on_init(
   std::fill(vel_commands_.begin(), vel_commands_.end(), 0.0);
   std::fill(tau_commands_.begin(), tau_commands_.end(), 0.0);
 
-  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-              "Successfully initialized throttled hardware interface with %zu joints",
-              num_joints_);
+  RCLCPP_INFO(
+      rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+      "Successfully initialized throttled hardware interface with %zu joints",
+      num_joints_);
 
   return CallbackReturn::SUCCESS;
 }
@@ -199,10 +200,17 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::read(
   // Use controller period as timeout (convert to microseconds)
   int timeout_us = static_cast<int>(period.seconds() * 1e6);
 
+  // Determine how many motors to receive from (arm + optionally gripper)
+  size_t num_arm_joints = controller_config_.arm_joints.size();
+  size_t num_motors_to_receive = num_arm_joints;
+  if (gripper_claimed_ && controller_config_.gripper_joint.has_value()) {
+    num_motors_to_receive++;
+  }
+
   // ALWAYS try to read from CAN (non-blocking, returns immediately if no data)
   std::array<openarm::damiao_motor::StateResult, MAX_JOINTS> motor_states;
   size_t received = openarm_rt_->receive_states_batch_rt(
-      motor_states.data(), num_joints_, timeout_us);
+      motor_states.data(), num_motors_to_receive, timeout_us);
 
   if (received > 0) {
     stats_.can_reads++;
@@ -222,9 +230,9 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::read(
 
   // Periodically log stats
   auto now = std::chrono::steady_clock::now();
-  auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                     now - last_stats_log_)
-                     .count();
+  auto elapsed =
+      std::chrono::duration_cast<std::chrono::seconds>(now - last_stats_log_)
+          .count();
   if (elapsed >= STATS_LOG_INTERVAL_SEC) {
     log_stats();
     last_stats_log_ = now;
@@ -258,26 +266,50 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
 
   // Send commands based on current mode
   if (current_mode_ == ControlMode::MIT) {
-    // Pack MIT commands
-    for (size_t i = 0; i < num_joints_; i++) {
+    // Pack MIT commands for arm joints
+    size_t num_arm_joints = controller_config_.arm_joints.size();
+    for (size_t i = 0; i < num_arm_joints; i++) {
       mit_params_[i].q = pos_commands_[i];
       mit_params_[i].dq = vel_commands_[i];
       mit_params_[i].tau = tau_commands_[i];
       mit_params_[i].kp = controller_config_.arm_joints[i].kp;
       mit_params_[i].kd = controller_config_.arm_joints[i].kd;
     }
+
+    // Pack gripper command if gripper is claimed
+    size_t num_motors_to_send = num_arm_joints;
+    if (gripper_claimed_ && controller_config_.gripper_joint.has_value()) {
+      const auto& gripper = controller_config_.gripper_joint.value();
+      mit_params_[num_arm_joints].q = pos_commands_[num_arm_joints];
+      mit_params_[num_arm_joints].dq = vel_commands_[num_arm_joints];
+      mit_params_[num_arm_joints].tau = tau_commands_[num_arm_joints];
+      mit_params_[num_arm_joints].kp = gripper.kp;
+      mit_params_[num_arm_joints].kd = gripper.kd;
+      num_motors_to_send++;
+    }
+
     // Send MIT commands (batch)
-    openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_,
+    openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_motors_to_send,
                                    timeout_us);
 
   } else if (current_mode_ == ControlMode::POSITION_VELOCITY) {
-    // Pack position/velocity commands
-    for (size_t i = 0; i < num_joints_; i++) {
+    // Pack position/velocity commands for arm joints
+    size_t num_arm_joints = controller_config_.arm_joints.size();
+    for (size_t i = 0; i < num_arm_joints; i++) {
       posvel_params_[i].q = pos_commands_[i];
       posvel_params_[i].dq = vel_commands_[i];
     }
+
+    // Pack gripper command if gripper is claimed
+    size_t num_motors_to_send = num_arm_joints;
+    if (gripper_claimed_ && controller_config_.gripper_joint.has_value()) {
+      posvel_params_[num_arm_joints].q = pos_commands_[num_arm_joints];
+      posvel_params_[num_arm_joints].dq = vel_commands_[num_arm_joints];
+      num_motors_to_send++;
+    }
+
     // Send position/velocity commands (batch)
-    openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
+    openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_motors_to_send,
                                       timeout_us);
   } else {
     // No active controller - send refresh command
@@ -299,6 +331,26 @@ OpenArm_v10ThrottledHardware::prepare_command_mode_switch(
                  "Cannot determine control mode from interfaces");
     return hardware_interface::return_type::ERROR;
   }
+
+  // Check if gripper is being claimed
+  bool gripper_claimed = false;
+  if (controller_config_.gripper_joint.has_value()) {
+    size_t num_arm_joints = controller_config_.arm_joints.size();
+    std::string gripper_name = joint_names_[num_arm_joints];
+
+    for (const auto& interface : start_interfaces) {
+      if (interface.find(gripper_name) != std::string::npos) {
+        gripper_claimed = true;
+        break;
+      }
+    }
+  }
+
+  gripper_claimed_ = gripper_claimed;
+
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+              "Interface claiming: gripper %s",
+              gripper_claimed_ ? "claimed" : "not claimed");
 
   return hardware_interface::return_type::OK;
 }
@@ -385,16 +437,15 @@ bool OpenArm_v10ThrottledHardware::parse_config(
       // Parse MIT gains
       auto kp_it = joint.parameters.find("kp");
       auto kd_it = joint.parameters.find("kd");
-      motor_config.kp = (kp_it != joint.parameters.end())
-                            ? std::stod(kp_it->second)
-                            : 0.0;
-      motor_config.kd = (kd_it != joint.parameters.end())
-                            ? std::stod(kd_it->second)
-                            : 0.0;
+      motor_config.kp =
+          (kp_it != joint.parameters.end()) ? std::stod(kp_it->second) : 0.0;
+      motor_config.kd =
+          (kd_it != joint.parameters.end()) ? std::stod(kd_it->second) : 0.0;
 
       controller_config_.arm_joints.push_back(motor_config);
 
-      RCLCPP_INFO(logger, "Configured arm joint: %s (type=%d, kp=%.2f, kd=%.2f)",
+      RCLCPP_INFO(logger,
+                  "Configured arm joint: %s (type=%d, kp=%.2f, kd=%.2f)",
                   joint.name.c_str(), static_cast<int>(motor_config.type),
                   motor_config.kp, motor_config.kd);
     }
@@ -472,10 +523,12 @@ ControlMode OpenArm_v10ThrottledHardware::determine_mode_from_interfaces(
   bool has_effort = false;
 
   for (const auto& interface : interfaces) {
-    if (interface.find(hardware_interface::HW_IF_POSITION) != std::string::npos) {
+    if (interface.find(hardware_interface::HW_IF_POSITION) !=
+        std::string::npos) {
       has_position = true;
     }
-    if (interface.find(hardware_interface::HW_IF_VELOCITY) != std::string::npos) {
+    if (interface.find(hardware_interface::HW_IF_VELOCITY) !=
+        std::string::npos) {
       has_velocity = true;
     }
     if (interface.find(hardware_interface::HW_IF_EFFORT) != std::string::npos) {
@@ -506,11 +559,13 @@ void OpenArm_v10ThrottledHardware::log_stats() {
   RCLCPP_INFO(logger, "CAN operations:");
   RCLCPP_INFO(logger, "  Writes:  %lu (skipped: %lu due to throttling)",
               stats_.can_writes, stats_.tx_skipped);
-  RCLCPP_INFO(logger, "  Reads:   %lu attempts (received: %lu frames, no-data: %lu)",
+  RCLCPP_INFO(logger,
+              "  Reads:   %lu attempts (received: %lu frames, no-data: %lu)",
               stats_.can_reads, stats_.rx_received, stats_.rx_no_data);
 
   if (stats_.write_count > 0) {
-    double write_rate = stats_.can_writes * 1000.0 / (STATS_LOG_INTERVAL_SEC * 1000.0);
+    double write_rate =
+        stats_.can_writes * 1000.0 / (STATS_LOG_INTERVAL_SEC * 1000.0);
     double throttle_percent = 100.0 * stats_.tx_skipped / stats_.write_count;
     RCLCPP_INFO(logger, "Actual CAN write rate: %.1f Hz (%.1f%% throttled)",
                 write_rate, throttle_percent);
