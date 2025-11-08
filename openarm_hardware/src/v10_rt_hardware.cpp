@@ -393,13 +393,13 @@ OpenArm_v10RTHardware::prepare_command_mode_switch(
   pending_mode_ = new_mode;
 
   // Validate and update interface claiming states
-  // Count which arm joints and gripper joint are being claimed
+  // Track which unique joints are being claimed
   size_t num_arm_joints = motor_configs_.size();
   bool has_gripper = gripper_config_.has_value();
-  size_t arm_joints_claimed = 0;
+  std::set<size_t> arm_joint_indices_claimed;
   bool gripper_claimed = false;
 
-  // Count claimed interfaces in start_interfaces
+  // Count unique joints being claimed in start_interfaces
   for (const auto& interface : start_interfaces) {
     // Extract joint index from interface name (format: "joint_name/interface_type")
     size_t slash_pos = interface.find('/');
@@ -411,7 +411,7 @@ OpenArm_v10RTHardware::prepare_command_mode_switch(
     for (size_t i = 0; i < joint_names_.size(); ++i) {
       if (joint_names_[i] == joint_name) {
         if (i < num_arm_joints) {
-          arm_joints_claimed++;
+          arm_joint_indices_claimed.insert(i);  // Track unique arm joints
         } else if (has_gripper && i == num_arm_joints) {
           gripper_claimed = true;
         }
@@ -421,11 +421,12 @@ OpenArm_v10RTHardware::prepare_command_mode_switch(
   }
 
   // Validate: if any arm joint is claimed, all arm joints must be claimed
-  if (arm_joints_claimed > 0 && arm_joints_claimed != num_arm_joints) {
+  size_t num_unique_arm_joints_claimed = arm_joint_indices_claimed.size();
+  if (num_unique_arm_joints_claimed > 0 && num_unique_arm_joints_claimed != num_arm_joints) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
                  "Invalid interface claiming: %zu of %zu arm joints claimed. "
                  "All arm joints must be claimed together.",
-                 arm_joints_claimed, num_arm_joints);
+                 num_unique_arm_joints_claimed, num_arm_joints);
     return hardware_interface::return_type::ERROR;
   }
 
@@ -470,7 +471,7 @@ OpenArm_v10RTHardware::prepare_command_mode_switch(
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
               "Interface claiming validated: %zu arm joints, gripper %s",
-              arm_joints_claimed, gripper_claimed ? "claimed" : "not claimed");
+              arm_joint_indices_claimed.size(), gripper_claimed ? "claimed" : "not claimed");
 
   return hardware_interface::return_type::OK;
 }
