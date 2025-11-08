@@ -145,6 +145,7 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
   std::atomic<bool> position_interface_claimed_{false};
   std::atomic<bool> velocity_interface_claimed_{false};
   std::atomic<bool> effort_interface_claimed_{false};
+  std::atomic<bool> gripper_claimed_{false};
 
   // RT-safe OpenArm interface
   std::unique_ptr<openarm::realtime::OpenArm> openarm_rt_;

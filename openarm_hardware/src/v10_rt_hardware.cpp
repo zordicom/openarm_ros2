@@ -392,7 +392,44 @@ OpenArm_v10RTHardware::prepare_command_mode_switch(
   // Store pending mode
   pending_mode_ = new_mode;
 
-  // Update interface claiming states based on stop_interfaces
+  // Validate and update interface claiming states
+  // Count which arm joints and gripper joint are being claimed
+  size_t num_arm_joints = motor_configs_.size();
+  bool has_gripper = gripper_config_.has_value();
+  size_t arm_joints_claimed = 0;
+  bool gripper_claimed = false;
+
+  // Count claimed interfaces in start_interfaces
+  for (const auto& interface : start_interfaces) {
+    // Extract joint index from interface name (format: "joint_name/interface_type")
+    size_t slash_pos = interface.find('/');
+    if (slash_pos == std::string::npos) continue;
+
+    std::string joint_name = interface.substr(0, slash_pos);
+
+    // Find which joint this is
+    for (size_t i = 0; i < joint_names_.size(); ++i) {
+      if (joint_names_[i] == joint_name) {
+        if (i < num_arm_joints) {
+          arm_joints_claimed++;
+        } else if (has_gripper && i == num_arm_joints) {
+          gripper_claimed = true;
+        }
+        break;
+      }
+    }
+  }
+
+  // Validate: if any arm joint is claimed, all arm joints must be claimed
+  if (arm_joints_claimed > 0 && arm_joints_claimed != num_arm_joints) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                 "Invalid interface claiming: %zu of %zu arm joints claimed. "
+                 "All arm joints must be claimed together.",
+                 arm_joints_claimed, num_arm_joints);
+    return hardware_interface::return_type::ERROR;
+  }
+
+  // Update claiming states for stop_interfaces
   for (const auto& interface : stop_interfaces) {
     if (interface.find(hardware_interface::HW_IF_POSITION) !=
         std::string::npos) {
@@ -404,9 +441,17 @@ OpenArm_v10RTHardware::prepare_command_mode_switch(
                std::string::npos) {
       effort_interface_claimed_ = false;
     }
+
+    // Check if stopping gripper
+    if (has_gripper) {
+      std::string gripper_name = joint_names_[num_arm_joints];
+      if (interface.find(gripper_name) != std::string::npos) {
+        gripper_claimed_ = false;
+      }
+    }
   }
 
-  // Update interface claiming states based on start_interfaces
+  // Update claiming states for start_interfaces
   for (const auto& interface : start_interfaces) {
     if (interface.find(hardware_interface::HW_IF_POSITION) !=
         std::string::npos) {
@@ -419,6 +464,13 @@ OpenArm_v10RTHardware::prepare_command_mode_switch(
       effort_interface_claimed_ = true;
     }
   }
+
+  // Update gripper claiming state (RT-safe atomic write)
+  gripper_claimed_.store(gripper_claimed, std::memory_order_release);
+
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "Interface claiming validated: %zu arm joints, gripper %s",
+              arm_joints_claimed, gripper_claimed ? "claimed" : "not claimed");
 
   return hardware_interface::return_type::OK;
 }
@@ -767,41 +819,67 @@ void OpenArm_v10RTHardware::can_worker_loop() {
       if (cmd && cmd->valid && cmd->mode != ControlMode::UNINITIALIZED) {
         // Send commands to motors based on current mode
         if (cmd->mode == ControlMode::MIT) {
-          // Pack MIT commands
-          for (size_t i = 0; i < num_joints_; ++i) {
+          // Pack MIT commands for arm joints
+          size_t num_arm_joints = motor_configs_.size();
+          for (size_t i = 0; i < num_arm_joints; ++i) {
             mit_params_[i].q = cmd->positions[i];
             mit_params_[i].dq = cmd->velocities[i];
             mit_params_[i].tau = cmd->torques[i];
             mit_params_[i].kp = motor_configs_[i].kp;
             mit_params_[i].kd = motor_configs_[i].kd;
           }
+
+          // Pack gripper command if gripper is claimed (RT-safe atomic read)
+          size_t num_motors_to_send = num_arm_joints;
+          if (gripper_claimed_.load(std::memory_order_acquire) &&
+              gripper_config_.has_value()) {
+            const auto& gripper = gripper_config_.value();
+            mit_params_[num_arm_joints].q = cmd->positions[num_arm_joints];
+            mit_params_[num_arm_joints].dq = cmd->velocities[num_arm_joints];
+            mit_params_[num_arm_joints].tau = cmd->torques[num_arm_joints];
+            mit_params_[num_arm_joints].kp = gripper.kp;
+            mit_params_[num_arm_joints].kd = gripper.kd;
+            num_motors_to_send++;
+          }
+
           // Send MIT commands (batch) using RT-safe method
           size_t sent = openarm_rt_->send_mit_batch_rt(
-              mit_params_.data(), num_joints_, config_.can_timeout_us);
-          if (sent != num_joints_) {
+              mit_params_.data(), num_motors_to_send, config_.can_timeout_us);
+          if (sent != num_motors_to_send) {
             RCLCPP_WARN_THROTTLE(
                 rclcpp::get_logger("OpenArm_v10RTHardware"), steady_clock,
                 1000,  // Log every 1 second
                 "Failed to send MIT commands. Sent %zu/%zu frames", sent,
-                num_joints_);
+                num_motors_to_send);
           }
 
         } else if (cmd->mode == ControlMode::POSITION_VELOCITY) {
-          // Pack position/velocity commands
-          for (size_t i = 0; i < num_joints_; ++i) {
+          // Pack position/velocity commands for arm joints
+          size_t num_arm_joints = motor_configs_.size();
+          for (size_t i = 0; i < num_arm_joints; ++i) {
             posvel_params_[i].q = cmd->positions[i];
             posvel_params_[i].dq = cmd->velocities[i];
           }
+
+          // Pack gripper command if gripper is claimed (RT-safe atomic read)
+          size_t num_motors_to_send = num_arm_joints;
+          if (gripper_claimed_.load(std::memory_order_acquire) &&
+              gripper_config_.has_value()) {
+            posvel_params_[num_arm_joints].q = cmd->positions[num_arm_joints];
+            posvel_params_[num_arm_joints].dq = cmd->velocities[num_arm_joints];
+            num_motors_to_send++;
+          }
+
           // Send position/velocity commands (batch) using RT-safe method
           size_t sent = openarm_rt_->send_posvel_batch_rt(
-              posvel_params_.data(), num_joints_, config_.can_timeout_us);
-          if (sent != num_joints_) {
+              posvel_params_.data(), num_motors_to_send, config_.can_timeout_us);
+          if (sent != num_motors_to_send) {
             RCLCPP_WARN_THROTTLE(rclcpp::get_logger("OpenArm_v10RTHardware"),
                                  steady_clock,
                                  1000,  // Log every 1 second
                                  "Failed to send Position/Velocity commands. "
                                  "Sent %zu/%zu frames",
-                                 sent, num_joints_);
+                                 sent, num_motors_to_send);
           }
         }
       } else {
@@ -824,13 +902,21 @@ void OpenArm_v10RTHardware::can_worker_loop() {
       StateData new_state;
       new_state.valid = false;
 
+      // Determine how many motors to receive from (arm + optionally gripper)
+      size_t num_arm_joints = motor_configs_.size();
+      size_t num_motors_to_receive = num_arm_joints;
+      if (gripper_claimed_.load(std::memory_order_acquire) &&
+          gripper_config_.has_value()) {
+        num_motors_to_receive++;
+      }
+
       // Receive motor states (batch) using RT-safe method
       std::array<openarm::damiao_motor::StateResult, MAX_JOINTS> motor_states;
       size_t received = openarm_rt_->receive_states_batch_rt(
-          motor_states.data(), num_joints_, config_.can_timeout_us);
+          motor_states.data(), num_motors_to_receive, config_.can_timeout_us);
 
       if (received > 0) {
-        for (size_t i = 0; i < num_joints_; ++i) {
+        for (size_t i = 0; i < num_motors_to_receive; ++i) {
           if (motor_states[i].valid) {
             new_state.positions[i] = motor_states[i].position;
             new_state.velocities[i] = motor_states[i].velocity;
