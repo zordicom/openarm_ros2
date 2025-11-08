@@ -96,11 +96,18 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_configure(
   // Create RT-safe OpenArm interface
   openarm_rt_ = std::make_unique<openarm::can::RTSafeOpenArm>();
 
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "Initializing CAN interface: %s", config_.can_interface.c_str());
+
   if (!openarm_rt_->init(config_.can_interface)) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                 "Failed to initialize RT-safe OpenArm interface");
+                 "Failed to initialize RT-safe OpenArm interface on %s",
+                 config_.can_interface.c_str());
     return CallbackReturn::ERROR;
   }
+
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "Successfully initialized CAN interface: %s", config_.can_interface.c_str());
 
   // Add motors to RT-safe wrapper based on configuration
   for (const auto& motor : motor_configs_) {
@@ -768,8 +775,15 @@ void OpenArm_v10RTHardware::can_worker_loop() {
             mit_params_[i].kd = config_.mit_kd;
           }
           // Send MIT commands (batch) using RT-safe method
-          openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_,
+          size_t sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_,
                                          config_.can_timeout_us);
+          if (sent != num_joints_) {
+            RCLCPP_WARN_THROTTLE(
+                rclcpp::get_logger("OpenArm_v10RTHardware"), steady_clock,
+                1000,  // Log every 1 second
+                "Failed to send MIT commands. Sent %zu/%zu frames",
+                sent, num_joints_);
+          }
 
         } else if (cmd->mode == ControlMode::POSITION_VELOCITY) {
           // Pack position/velocity commands
@@ -778,13 +792,28 @@ void OpenArm_v10RTHardware::can_worker_loop() {
             posvel_params_[i].velocity = cmd->velocities[i];
           }
           // Send position/velocity commands (batch) using RT-safe method
-          openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
+          size_t sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
                                             config_.can_timeout_us);
+          if (sent != num_joints_) {
+            RCLCPP_WARN_THROTTLE(
+                rclcpp::get_logger("OpenArm_v10RTHardware"), steady_clock,
+                1000,  // Log every 1 second
+                "Failed to send Position/Velocity commands. Sent %zu/%zu frames",
+                sent, num_joints_);
+          }
         }
       } else {
         // No active controller - send refresh command to get motor states
         // This uses the special 0x7FF CAN ID to request state feedback
-        openarm_rt_->refresh_all_motors_rt(config_.can_timeout_us);
+        size_t sent = openarm_rt_->refresh_all_motors_rt(config_.can_timeout_us);
+        if (sent == 0) {
+          RCLCPP_WARN_THROTTLE(
+              rclcpp::get_logger("OpenArm_v10RTHardware"), steady_clock,
+              1000,  // Log every 1 second
+              "Failed to send refresh commands. Socket ready: %s, Motor count: %zu",
+              openarm_rt_->is_ready() ? "true" : "false",
+              openarm_rt_->get_motor_count());
+        }
       }
     } else {
       // RECEIVE CYCLE: Read states from motors
