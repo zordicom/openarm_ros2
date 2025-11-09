@@ -506,6 +506,13 @@ bool OpenArm_v10ThrottledHardware::switch_to_mit_mode() {
     }
   }
 
+  // Switch motors to MIT control mode
+  if (!openarm_rt_->set_mode_all_rt(openarm::realtime::ControlMode::MIT, 1000)) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                 "Failed to set MIT mode on motors");
+    return false;
+  }
+
   // Initialize commands to current positions to avoid jumps
   for (size_t i = 0; i < num_joints_; i++) {
     pos_commands_[i] = pos_states_[i];
@@ -525,6 +532,13 @@ bool OpenArm_v10ThrottledHardware::switch_to_position_mode() {
                    "Failed to enable all motors for position mode");
       return false;
     }
+  }
+
+  // Switch motors to position/velocity control mode
+  if (!openarm_rt_->set_mode_all_rt(openarm::realtime::ControlMode::POSITION_VELOCITY, 1000)) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                 "Failed to set position/velocity mode on motors");
+    return false;
   }
 
   // Initialize commands to current positions
