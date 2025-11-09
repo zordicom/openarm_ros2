@@ -245,15 +245,6 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
 
   // Check if we should throttle this write
   auto now = std::chrono::steady_clock::now();
-  auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                        now - last_can_write_)
-                        .count();
-
-  if (elapsed_us < CAN_WRITE_INTERVAL_US) {
-    // Skip this write cycle - too soon since last write
-    stats_.tx_skipped++;
-    return hardware_interface::return_type::OK;
-  }
 
   // Time to write to CAN bus
   stats_.can_writes++;
@@ -534,8 +525,7 @@ void OpenArm_v10ThrottledHardware::log_stats() {
   RCLCPP_INFO(logger, "  read():  %lu calls", stats_.read_count);
   RCLCPP_INFO(logger, "  write(): %lu calls", stats_.write_count);
   RCLCPP_INFO(logger, "CAN operations:");
-  RCLCPP_INFO(logger, "  Writes:  %lu (skipped: %lu due to throttling)",
-              stats_.can_writes, stats_.tx_skipped);
+  RCLCPP_INFO(logger, "  Writes:  %lu", stats_.can_writes);
   RCLCPP_INFO(logger,
               "  Reads:   %lu attempts (received: %lu frames, no-data: %lu)",
               stats_.can_reads, stats_.rx_received, stats_.rx_no_data);
@@ -543,9 +533,7 @@ void OpenArm_v10ThrottledHardware::log_stats() {
   if (stats_.write_count > 0) {
     double write_rate =
         stats_.can_writes * 1000.0 / (STATS_LOG_INTERVAL_SEC * 1000.0);
-    double throttle_percent = 100.0 * stats_.tx_skipped / stats_.write_count;
-    RCLCPP_INFO(logger, "Actual CAN write rate: %.1f Hz (%.1f%% throttled)",
-                write_rate, throttle_percent);
+    RCLCPP_INFO(logger, "Actual CAN write rate: %.1f Hz", write_rate);
   }
 
   // Reset stats for next interval
