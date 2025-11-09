@@ -104,11 +104,11 @@ class OpenArm_v10ThrottledHardware : public hardware_interface::SystemInterface 
   std::array<openarm::damiao_motor::MITParam, MAX_JOINTS> mit_params_{};
   std::array<openarm::damiao_motor::PosVelParam, MAX_JOINTS> posvel_params_{};
 
+  // Pre-allocated CAN read buffer
+  std::array<openarm::damiao_motor::StateResult, MAX_JOINTS> motor_states_{};
+
   // Control mode management
   ControlMode current_mode_{ControlMode::UNINITIALIZED};
-
-  // Interface claiming state
-  bool gripper_claimed_{false};
 
   // RT-safe OpenArm interface
   std::unique_ptr<openarm::realtime::OpenArm> openarm_rt_;

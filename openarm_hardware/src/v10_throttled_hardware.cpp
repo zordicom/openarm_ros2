@@ -141,6 +141,31 @@ OpenArm_v10ThrottledHardware::on_activate(
   // Initialize last write time to now so we start writing immediately
   last_can_write_ = std::chrono::steady_clock::now();
 
+  // Pre-populate cached state by sending refresh and reading current motor
+  // positions
+  openarm_rt_->refresh_all_motors_rt(1000);
+
+  size_t received = openarm_rt_->receive_states_batch_rt(
+      motor_states_.data(), openarm_rt_->get_motor_count(), 1000);
+
+  if (received != num_joints_) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                 "Failed to get initial state for all motors: %zu/%zu",
+                 received, num_joints_);
+    return CallbackReturn::ERROR;
+  }
+
+  for (size_t i = 0; i < num_joints_; i++) {
+    if (motor_states_[i].valid) {
+      pos_states_[i] = motor_states_[i].position;
+      vel_states_[i] = motor_states_[i].velocity;
+      tau_states_[i] = motor_states_[i].torque;
+      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                  "Initialized joint %zu: pos=%.3f, vel=%.3f, tau=%.3f", i,
+                  pos_states_[i], vel_states_[i], tau_states_[i]);
+    }
+  }
+
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
               "Hardware interface activated successfully. Motors enabled.");
 
@@ -194,46 +219,18 @@ OpenArm_v10ThrottledHardware::export_command_interfaces() {
 }
 
 hardware_interface::return_type OpenArm_v10ThrottledHardware::read(
-    const rclcpp::Time& /*time*/, const rclcpp::Duration& period) {
+    const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
   stats_.read_count++;
 
-  // Use minimal timeout for non-blocking read
-  // We only read if data is immediately available from previous write()
-  int timeout_us = 100;  // Just enough time to read if data is available
-
-  // Determine how many motors to receive from (arm + optionally gripper)
-  size_t num_arm_joints = controller_config_.arm_joints.size();
-  size_t num_motors_to_receive = num_arm_joints;
-  if (gripper_claimed_ && controller_config_.gripper_joint.has_value()) {
-    num_motors_to_receive++;
-  }
-
-  // ALWAYS try to read from CAN (non-blocking, returns immediately if no data)
-  std::array<openarm::damiao_motor::StateResult, MAX_JOINTS> motor_states;
-  size_t received = openarm_rt_->receive_states_batch_rt(
-      motor_states.data(), num_motors_to_receive, timeout_us);
-
-  if (received > 0) {
-    stats_.can_reads++;
-    stats_.rx_received += received;
-
-    // Update cached states
-    for (size_t i = 0; i < received && i < num_joints_; i++) {
-      if (motor_states[i].valid) {
-        pos_states_[i] = motor_states[i].position;
-        vel_states_[i] = motor_states[i].velocity;
-        tau_states_[i] = motor_states[i].torque;
-      }
-    }
-  } else {
-    stats_.rx_no_data++;
-  }
+  // Always return cached state - no CAN communication in read()
+  // State is updated in write() after sending commands
 
   // Periodically log stats
   auto now = std::chrono::steady_clock::now();
   auto elapsed =
       std::chrono::duration_cast<std::chrono::seconds>(now - last_stats_log_)
           .count();
+
   if (elapsed >= STATS_LOG_INTERVAL_SEC) {
     log_stats();
     last_stats_log_ = now;
@@ -267,54 +264,58 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
 
   // Send commands based on current mode
   if (current_mode_ == ControlMode::MIT) {
-    // Pack MIT commands for arm joints
-    size_t num_arm_joints = controller_config_.arm_joints.size();
-    for (size_t i = 0; i < num_arm_joints; i++) {
+    // Pack MIT commands for all joints (arm + gripper if configured)
+    for (size_t i = 0; i < num_joints_; i++) {
       mit_params_[i].q = pos_commands_[i];
       mit_params_[i].dq = vel_commands_[i];
       mit_params_[i].tau = tau_commands_[i];
-      mit_params_[i].kp = controller_config_.arm_joints[i].kp;
-      mit_params_[i].kd = controller_config_.arm_joints[i].kd;
-    }
 
-    // Pack gripper command if gripper is claimed
-    size_t num_motors_to_send = num_arm_joints;
-    if (gripper_claimed_ && controller_config_.gripper_joint.has_value()) {
-      const auto& gripper = controller_config_.gripper_joint.value();
-      mit_params_[num_arm_joints].q = pos_commands_[num_arm_joints];
-      mit_params_[num_arm_joints].dq = vel_commands_[num_arm_joints];
-      mit_params_[num_arm_joints].tau = tau_commands_[num_arm_joints];
-      mit_params_[num_arm_joints].kp = gripper.kp;
-      mit_params_[num_arm_joints].kd = gripper.kd;
-      num_motors_to_send++;
+      // Use arm joint gains or gripper gains
+      if (i < controller_config_.arm_joints.size()) {
+        mit_params_[i].kp = controller_config_.arm_joints[i].kp;
+        mit_params_[i].kd = controller_config_.arm_joints[i].kd;
+      } else if (controller_config_.gripper_joint.has_value()) {
+        mit_params_[i].kp = controller_config_.gripper_joint->kp;
+        mit_params_[i].kd = controller_config_.gripper_joint->kd;
+      }
     }
 
     // Send MIT commands (batch)
-    openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_motors_to_send,
-                                   timeout_us);
+    openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_, timeout_us);
 
   } else if (current_mode_ == ControlMode::POSITION_VELOCITY) {
-    // Pack position/velocity commands for arm joints
-    size_t num_arm_joints = controller_config_.arm_joints.size();
-    for (size_t i = 0; i < num_arm_joints; i++) {
+    // Pack position/velocity commands for all joints
+    for (size_t i = 0; i < num_joints_; i++) {
       posvel_params_[i].q = pos_commands_[i];
       posvel_params_[i].dq = vel_commands_[i];
     }
 
-    // Pack gripper command if gripper is claimed
-    size_t num_motors_to_send = num_arm_joints;
-    if (gripper_claimed_ && controller_config_.gripper_joint.has_value()) {
-      posvel_params_[num_arm_joints].q = pos_commands_[num_arm_joints];
-      posvel_params_[num_arm_joints].dq = vel_commands_[num_arm_joints];
-      num_motors_to_send++;
-    }
-
     // Send position/velocity commands (batch)
-    openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_motors_to_send,
+    openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
                                       timeout_us);
   } else {
     // No active controller - send refresh command
     openarm_rt_->refresh_all_motors_rt(timeout_us);
+  }
+
+  // After sending commands, read back the motor states
+  size_t received = openarm_rt_->receive_states_batch_rt(
+      motor_states_.data(), num_joints_, timeout_us);
+
+  if (received > 0) {
+    stats_.can_reads++;
+    stats_.rx_received += received;
+
+    // Update cached states
+    for (size_t i = 0; i < received && i < num_joints_; i++) {
+      if (motor_states_[i].valid) {
+        pos_states_[i] = motor_states_[i].position;
+        vel_states_[i] = motor_states_[i].velocity;
+        tau_states_[i] = motor_states_[i].torque;
+      }
+    }
+  } else {
+    stats_.rx_no_data++;
   }
 
   return hardware_interface::return_type::OK;
@@ -332,26 +333,6 @@ OpenArm_v10ThrottledHardware::prepare_command_mode_switch(
                  "Cannot determine control mode from interfaces");
     return hardware_interface::return_type::ERROR;
   }
-
-  // Check if gripper is being claimed
-  bool gripper_claimed = false;
-  if (controller_config_.gripper_joint.has_value()) {
-    size_t num_arm_joints = controller_config_.arm_joints.size();
-    std::string gripper_name = joint_names_[num_arm_joints];
-
-    for (const auto& interface : start_interfaces) {
-      if (interface.find(gripper_name) != std::string::npos) {
-        gripper_claimed = true;
-        break;
-      }
-    }
-  }
-
-  gripper_claimed_ = gripper_claimed;
-
-  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-              "Interface claiming: gripper %s",
-              gripper_claimed_ ? "claimed" : "not claimed");
 
   return hardware_interface::return_type::OK;
 }
@@ -520,17 +501,12 @@ bool OpenArm_v10ThrottledHardware::switch_to_position_mode() {
 ControlMode OpenArm_v10ThrottledHardware::determine_mode_from_interfaces(
     const std::vector<std::string>& interfaces) {
   bool has_position = false;
-  bool has_velocity = false;
   bool has_effort = false;
 
   for (const auto& interface : interfaces) {
     if (interface.find(hardware_interface::HW_IF_POSITION) !=
         std::string::npos) {
       has_position = true;
-    }
-    if (interface.find(hardware_interface::HW_IF_VELOCITY) !=
-        std::string::npos) {
-      has_velocity = true;
     }
     if (interface.find(hardware_interface::HW_IF_EFFORT) != std::string::npos) {
       has_effort = true;
