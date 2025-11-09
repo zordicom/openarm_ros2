@@ -26,8 +26,12 @@ namespace openarm_hardware {
 
 OpenArm_v10ThrottledHardware::OpenArm_v10ThrottledHardware() {
   // Initialize timestamps
-  last_can_write_ = std::chrono::steady_clock::now();
-  last_stats_log_ = std::chrono::steady_clock::now();
+  auto now = std::chrono::steady_clock::now();
+  last_can_write_ = now;
+  last_stats_log_ = now;
+  last_partial_write_warn_ = now;
+  last_partial_read_warn_ = now;
+  last_no_data_warn_ = now;
 }
 
 OpenArm_v10ThrottledHardware::CallbackReturn
@@ -276,9 +280,14 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
     // Send MIT commands (batch)
     sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_, timeout_us);
     if (sent < num_joints_) {
-      RCLCPP_WARN_THROTTLE(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-                          *rclcpp::Clock::make_shared(), 1000,
-                          "Partial MIT write: sent %zu/%zu commands", sent, num_joints_);
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         now - last_partial_write_warn_)
+                         .count();
+      if (elapsed >= WARN_THROTTLE_MS) {
+        RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                    "Partial MIT write: sent %zu/%zu commands", sent, num_joints_);
+        last_partial_write_warn_ = now;
+      }
     }
 
   } else if (current_mode_ == ControlMode::POSITION_VELOCITY) {
@@ -292,9 +301,14 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
     sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
                                       timeout_us);
     if (sent < num_joints_) {
-      RCLCPP_WARN_THROTTLE(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-                          *rclcpp::Clock::make_shared(), 1000,
-                          "Partial pos/vel write: sent %zu/%zu commands", sent, num_joints_);
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         now - last_partial_write_warn_)
+                         .count();
+      if (elapsed >= WARN_THROTTLE_MS) {
+        RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                    "Partial pos/vel write: sent %zu/%zu commands", sent, num_joints_);
+        last_partial_write_warn_ = now;
+      }
     }
   } else {
     // No active controller - send refresh command
@@ -309,11 +323,16 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
     stats_.can_reads++;
     stats_.rx_received += received;
 
-    // Log partial reads
+    // Log partial reads (RT-safe throttling)
     if (received < num_joints_) {
-      RCLCPP_WARN_THROTTLE(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-                          *rclcpp::Clock::make_shared(), 1000,
-                          "Partial read: received %zu/%zu motor states", received, num_joints_);
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         now - last_partial_read_warn_)
+                         .count();
+      if (elapsed >= WARN_THROTTLE_MS) {
+        RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                    "Partial read: received %zu/%zu motor states", received, num_joints_);
+        last_partial_read_warn_ = now;
+      }
     }
 
     // Update cached states
@@ -326,9 +345,15 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
     }
   } else {
     stats_.rx_no_data++;
-    RCLCPP_WARN_THROTTLE(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-                        *rclcpp::Clock::make_shared(), 1000,
-                        "No motor states received in write cycle");
+    // Log no data (RT-safe throttling)
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       now - last_no_data_warn_)
+                       .count();
+    if (elapsed >= WARN_THROTTLE_MS) {
+      RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                  "No motor states received in write cycle");
+      last_no_data_warn_ = now;
+    }
   }
 
   return hardware_interface::return_type::OK;

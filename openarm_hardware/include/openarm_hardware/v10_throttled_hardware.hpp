@@ -133,6 +133,12 @@ class OpenArm_v10ThrottledHardware : public hardware_interface::SystemInterface 
   std::chrono::steady_clock::time_point last_stats_log_;
   static constexpr int STATS_LOG_INTERVAL_SEC = 10;
 
+  // Warning throttling (RT-safe)
+  std::chrono::steady_clock::time_point last_partial_write_warn_;
+  std::chrono::steady_clock::time_point last_partial_read_warn_;
+  std::chrono::steady_clock::time_point last_no_data_warn_;
+  static constexpr int64_t WARN_THROTTLE_MS = 1000;
+
   // Helper methods
   bool parse_config(const hardware_interface::HardwareInfo& info);
   bool switch_to_mit_mode();
