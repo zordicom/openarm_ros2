@@ -141,6 +141,14 @@ OpenArm_v10ThrottledHardware::on_activate(
   // Initialize last write time to now so we start writing immediately
   last_can_write_ = std::chrono::steady_clock::now();
 
+  // Add small delay to allow motors to fully initialize after enable
+  auto delay_start = std::chrono::steady_clock::now();
+  while (std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now() - delay_start)
+             .count() < 100) {
+    // Busy wait for 100ms
+  }
+
   size_t received = openarm_rt_->receive_states_batch_rt(
       motor_states_.data(), openarm_rt_->get_motor_count(), 5000);
 
@@ -151,7 +159,7 @@ OpenArm_v10ThrottledHardware::on_activate(
     return CallbackReturn::ERROR;
   }
 
-  for (size_t i = 0; i < num_joints_; i++) {
+  for (size_t i = 0; i < received; i++) {
     if (motor_states_[i].valid) {
       pos_states_[i] = motor_states_[i].position;
       vel_states_[i] = motor_states_[i].velocity;
@@ -246,6 +254,7 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
   // Use controller period as timeout (convert to microseconds)
   int timeout_us = static_cast<int>(period.seconds() * 1e6);
 
+  size_t sent = 0;
   // Send commands based on current mode
   if (current_mode_ == ControlMode::MIT) {
     // Pack MIT commands for all joints (arm + gripper if configured)
@@ -265,7 +274,12 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
     }
 
     // Send MIT commands (batch)
-    openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_, timeout_us);
+    sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_, timeout_us);
+    if (sent < num_joints_) {
+      RCLCPP_WARN_THROTTLE(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                          *rclcpp::Clock::make_shared(), 1000,
+                          "Partial MIT write: sent %zu/%zu commands", sent, num_joints_);
+    }
 
   } else if (current_mode_ == ControlMode::POSITION_VELOCITY) {
     // Pack position/velocity commands for all joints
@@ -275,8 +289,13 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
     }
 
     // Send position/velocity commands (batch)
-    openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
+    sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
                                       timeout_us);
+    if (sent < num_joints_) {
+      RCLCPP_WARN_THROTTLE(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                          *rclcpp::Clock::make_shared(), 1000,
+                          "Partial pos/vel write: sent %zu/%zu commands", sent, num_joints_);
+    }
   } else {
     // No active controller - send refresh command
     openarm_rt_->refresh_all_motors_rt(timeout_us);
@@ -290,6 +309,13 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
     stats_.can_reads++;
     stats_.rx_received += received;
 
+    // Log partial reads
+    if (received < num_joints_) {
+      RCLCPP_WARN_THROTTLE(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                          *rclcpp::Clock::make_shared(), 1000,
+                          "Partial read: received %zu/%zu motor states", received, num_joints_);
+    }
+
     // Update cached states
     for (size_t i = 0; i < received && i < num_joints_; i++) {
       if (motor_states_[i].valid) {
@@ -300,6 +326,9 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
     }
   } else {
     stats_.rx_no_data++;
+    RCLCPP_WARN_THROTTLE(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                        *rclcpp::Clock::make_shared(), 1000,
+                        "No motor states received in write cycle");
   }
 
   return hardware_interface::return_type::OK;
