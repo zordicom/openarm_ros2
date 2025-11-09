@@ -130,8 +130,8 @@ OpenArm_v10ThrottledHardware::on_activate(
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
               "Enabling motors on activation");
 
-  size_t enabled = openarm_rt_->enable_all_motors_rt(1000);
-  if (enabled != openarm_rt_->get_motor_count()) {
+  size_t enabled = openarm_rt_->enable_all_motors_rt(5000);
+  if (enabled != num_joints_) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
                  "Failed to enable all motors: %zu/%zu", enabled,
                  openarm_rt_->get_motor_count());
@@ -141,12 +141,8 @@ OpenArm_v10ThrottledHardware::on_activate(
   // Initialize last write time to now so we start writing immediately
   last_can_write_ = std::chrono::steady_clock::now();
 
-  // Pre-populate cached state by sending refresh and reading current motor
-  // positions
-  openarm_rt_->refresh_all_motors_rt(1000);
-
   size_t received = openarm_rt_->receive_states_batch_rt(
-      motor_states_.data(), openarm_rt_->get_motor_count(), 1000);
+      motor_states_.data(), openarm_rt_->get_motor_count(), 5000);
 
   if (received != num_joints_) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
@@ -221,9 +217,6 @@ OpenArm_v10ThrottledHardware::export_command_interfaces() {
 hardware_interface::return_type OpenArm_v10ThrottledHardware::read(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
   stats_.read_count++;
-
-  // Always return cached state - no CAN communication in read()
-  // State is updated in write() after sending commands
 
   // Periodically log stats
   auto now = std::chrono::steady_clock::now();
