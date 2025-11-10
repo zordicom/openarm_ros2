@@ -176,8 +176,11 @@ OpenArm_v10ThrottledHardware::on_activate(
     return CallbackReturn::ERROR;
   }
 
-  // Initialize last write time to now so we start writing immediately
-  last_can_write_ = std::chrono::steady_clock::now();
+  // Initialize last write time for each motor so we start writing immediately
+  auto now = std::chrono::steady_clock::now();
+  for (size_t i = 0; i < num_joints_; ++i) {
+    last_motor_write_[i] = now;
+  }
 
   // Add small delay to allow motors to fully initialize after enable
   auto delay_start = std::chrono::steady_clock::now();
@@ -327,6 +330,7 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
       stats_.can_writes++;
       sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), motors_to_send, timeout_us);
       if (sent < motors_to_send) {
+        stats_.tx_partial++;
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                            now - last_partial_write_warn_)
                            .count();
@@ -352,6 +356,7 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
       sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), motors_to_send,
                                         timeout_us);
       if (sent < motors_to_send) {
+        stats_.tx_partial++;
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                            now - last_partial_write_warn_)
                            .count();
@@ -380,6 +385,7 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
 
     // Log partial reads (RT-safe throttling)
     if (received < num_joints_) {
+      stats_.rx_partial++;
       auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                          now - last_partial_read_warn_)
                          .count();
@@ -645,16 +651,39 @@ void OpenArm_v10ThrottledHardware::log_stats() {
   RCLCPP_INFO(logger, "Controller calls:");
   RCLCPP_INFO(logger, "  read():  %lu calls", stats_.read_count);
   RCLCPP_INFO(logger, "  write(): %lu calls", stats_.write_count);
-  RCLCPP_INFO(logger, "CAN operations:");
-  RCLCPP_INFO(logger, "  Writes:  %lu", stats_.can_writes);
-  RCLCPP_INFO(logger,
-              "  Reads:   %lu attempts (received: %lu frames, no-data: %lu)",
-              stats_.can_reads, stats_.rx_received, stats_.rx_no_data);
 
-  if (stats_.write_count > 0) {
-    double write_rate =
-        stats_.can_writes * 1000.0 / (STATS_LOG_INTERVAL_SEC * 1000.0);
-    RCLCPP_INFO(logger, "Actual CAN write rate: %.1f Hz", write_rate);
+  RCLCPP_INFO(logger, "CAN operations:");
+  RCLCPP_INFO(logger, "  Batch writes:  %lu (partial: %lu)",
+              stats_.can_writes, stats_.tx_partial);
+  RCLCPP_INFO(logger, "  Batch reads:   %lu (received: %lu frames, partial: %lu, no-data: %lu)",
+              stats_.can_reads, stats_.rx_received, stats_.rx_partial, stats_.rx_no_data);
+
+  // Highlight performance issues
+  if (stats_.tx_partial > 0 || stats_.rx_partial > 0 || stats_.rx_no_data > 0) {
+    RCLCPP_WARN(logger, "Performance issues detected:");
+    if (stats_.tx_partial > 0) {
+      double tx_partial_pct = 100.0 * stats_.tx_partial / std::max(stats_.can_writes, 1UL);
+      RCLCPP_WARN(logger, "  Partial writes: %lu (%.1f%% of writes)",
+                  stats_.tx_partial, tx_partial_pct);
+    }
+    if (stats_.rx_partial > 0) {
+      double rx_partial_pct = 100.0 * stats_.rx_partial / std::max(stats_.can_reads, 1UL);
+      RCLCPP_WARN(logger, "  Partial reads: %lu (%.1f%% of reads)",
+                  stats_.rx_partial, rx_partial_pct);
+    }
+    if (stats_.rx_no_data > 0) {
+      double no_data_pct = 100.0 * stats_.rx_no_data / std::max(stats_.write_count, 1UL);
+      RCLCPP_WARN(logger, "  No data received: %lu (%.1f%% of write cycles)",
+                  stats_.rx_no_data, no_data_pct);
+    }
+  }
+
+  // Log per-motor refresh rates
+  RCLCPP_INFO(logger, "Motor refresh rates (configured):");
+  for (size_t i = 0; i < num_joints_; i++) {
+    double rate_hz = 1000000.0 / motor_write_interval_us_[i];
+    RCLCPP_INFO(logger, "  Motor %zu: %.1f Hz (interval: %ld us)",
+                i, rate_hz, motor_write_interval_us_[i]);
   }
 
   // Reset stats for next interval

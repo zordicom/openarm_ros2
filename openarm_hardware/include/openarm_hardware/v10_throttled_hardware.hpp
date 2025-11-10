@@ -125,8 +125,10 @@ class OpenArm_v10ThrottledHardware : public hardware_interface::SystemInterface 
     uint64_t can_writes{0};
     uint64_t can_reads{0};
     uint64_t tx_skipped{0};     // Write cycles skipped due to throttling
+    uint64_t tx_partial{0};     // Partial writes (not all motors sent)
     uint64_t rx_no_data{0};     // Read cycles with no data available
     uint64_t rx_received{0};    // Successful motor state reads
+    uint64_t rx_partial{0};     // Partial reads (not all motors received)
   };
   Stats stats_;
 
