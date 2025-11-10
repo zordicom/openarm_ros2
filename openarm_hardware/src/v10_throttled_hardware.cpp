@@ -329,6 +329,12 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
     if (motors_to_send > 0) {
       stats_.can_writes++;
       sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), motors_to_send, timeout_us);
+
+      // Track per-motor sends
+      for (size_t j = 0; j < sent; j++) {
+        stats_.motor_sends[motors_to_update_[j]]++;
+      }
+
       if (sent < motors_to_send) {
         stats_.tx_partial++;
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -355,6 +361,12 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
       stats_.can_writes++;
       sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), motors_to_send,
                                         timeout_us);
+
+      // Track per-motor sends
+      for (size_t j = 0; j < sent; j++) {
+        stats_.motor_sends[motors_to_update_[j]]++;
+      }
+
       if (sent < motors_to_send) {
         stats_.tx_partial++;
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -383,6 +395,16 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
     stats_.can_reads++;
     stats_.rx_received += received;
 
+    // Track per-motor receives and update cached states
+    for (size_t i = 0; i < received && i < num_joints_; i++) {
+      if (motor_states_[i].valid) {
+        stats_.motor_receives[i]++;
+        pos_states_[i] = motor_states_[i].position;
+        vel_states_[i] = motor_states_[i].velocity;
+        tau_states_[i] = motor_states_[i].torque;
+      }
+    }
+
     // Log partial reads (RT-safe throttling)
     if (received < num_joints_) {
       stats_.rx_partial++;
@@ -393,15 +415,6 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
         RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
                     "Partial read: received %zu/%zu motor states", received, num_joints_);
         last_partial_read_warn_ = now;
-      }
-    }
-
-    // Update cached states
-    for (size_t i = 0; i < received && i < num_joints_; i++) {
-      if (motor_states_[i].valid) {
-        pos_states_[i] = motor_states_[i].position;
-        vel_states_[i] = motor_states_[i].velocity;
-        tau_states_[i] = motor_states_[i].torque;
       }
     }
   } else {
@@ -687,12 +700,26 @@ void OpenArm_v10ThrottledHardware::log_stats() {
     }
   }
 
-  // Log per-motor refresh rates
-  RCLCPP_INFO(logger, "Motor refresh rates (configured):");
+  // Log per-motor send/receive counts with expected rates
+  RCLCPP_INFO(logger, "Per-motor statistics:");
   for (size_t i = 0; i < num_joints_; i++) {
-    double rate_hz = 1000000.0 / motor_write_interval_us_[i];
-    RCLCPP_INFO(logger, "  Motor %zu: %.1f Hz (interval: %ld us)",
-                i, rate_hz, motor_write_interval_us_[i]);
+    double expected_rate_hz = 1000000.0 / motor_write_interval_us_[i];
+    double actual_send_rate = stats_.motor_sends[i] / (double)STATS_LOG_INTERVAL_SEC;
+    double actual_recv_rate = stats_.motor_receives[i] / (double)STATS_LOG_INTERVAL_SEC;
+
+    // Warn if actual rates are significantly lower than expected
+    bool send_deficit = actual_send_rate < (expected_rate_hz * 0.9);  // More than 10% deficit
+    bool recv_deficit = actual_recv_rate < (expected_rate_hz * 0.9);
+
+    if (send_deficit || recv_deficit) {
+      RCLCPP_WARN(logger, "  Motor %zu: sends=%lu (%.1f Hz, expected %.1f Hz), receives=%lu (%.1f Hz, expected %.1f Hz)",
+                  i, stats_.motor_sends[i], actual_send_rate, expected_rate_hz,
+                  stats_.motor_receives[i], actual_recv_rate, expected_rate_hz);
+    } else {
+      RCLCPP_INFO(logger, "  Motor %zu: sends=%lu (%.1f Hz), receives=%lu (%.1f Hz) [OK]",
+                  i, stats_.motor_sends[i], actual_send_rate,
+                  stats_.motor_receives[i], actual_recv_rate);
+    }
   }
 
   // Reset stats for next interval

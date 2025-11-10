@@ -129,6 +129,10 @@ class OpenArm_v10ThrottledHardware : public hardware_interface::SystemInterface 
     uint64_t rx_no_data{0};     // Read cycles with no data available
     uint64_t rx_received{0};    // Successful motor state reads
     uint64_t rx_partial{0};     // Partial reads (not all motors received)
+
+    // Per-motor tracking
+    std::array<uint64_t, MAX_JOINTS> motor_sends{};     // Commands sent to each motor
+    std::array<uint64_t, MAX_JOINTS> motor_receives{};  // States received from each motor
   };
   Stats stats_;
 
