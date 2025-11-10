@@ -113,6 +113,9 @@ class OpenArm_v10ThrottledHardware : public hardware_interface::SystemInterface 
   // RT-safe OpenArm interface
   std::unique_ptr<openarm::realtime::OpenArm> openarm_rt_;
 
+  // Mapping from recv_can_id to joint index
+  std::array<int, 2048> recv_can_id_to_joint_idx_;  // CAN IDs are 11-bit (0-2047)
+
   // Per-motor throttling for variable rate refresh
   std::array<std::chrono::steady_clock::time_point, MAX_JOINTS> last_motor_write_;
   std::array<int64_t, MAX_JOINTS> motor_write_interval_us_;  // Calculated from update_rate_hz

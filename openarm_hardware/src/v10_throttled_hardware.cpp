@@ -37,7 +37,9 @@ OpenArm_v10ThrottledHardware::OpenArm_v10ThrottledHardware() {
   // Initialize per-motor timestamps to epoch (will be updated on first write)
   std::fill(last_motor_write_.begin(), last_motor_write_.end(),
             std::chrono::steady_clock::time_point());
-  std::fill(motor_write_interval_us_.begin(), motor_write_interval_us_.end(), 0);
+  std::fill(motor_write_interval_us_.begin(), motor_write_interval_us_.end(),
+            0);
+  std::fill(recv_can_id_to_joint_idx_.begin(), recv_can_id_to_joint_idx_.end(), -1);
 }
 
 OpenArm_v10ThrottledHardware::CallbackReturn
@@ -82,23 +84,24 @@ OpenArm_v10ThrottledHardware::on_init(
 OpenArm_v10ThrottledHardware::CallbackReturn
 OpenArm_v10ThrottledHardware::on_configure(
     const rclcpp_lifecycle::State& /*previous_state*/) {
-  // Create appropriate transport (CAN or CAN-FD)
   try {
     std::unique_ptr<openarm::realtime::IOpenArmTransport> transport;
     if (controller_config_.can_fd) {
       RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
                   "Initializing with CAN-FD transport on %s",
                   config_.can_interface.c_str());
-      transport = std::make_unique<openarm::realtime::CANFDTransport>(config_.can_interface);
+      transport = std::make_unique<openarm::realtime::CANFDTransport>(
+          config_.can_interface);
     } else {
       RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
                   "Initializing with standard CAN transport on %s",
                   config_.can_interface.c_str());
-      transport = std::make_unique<openarm::realtime::CANTransport>(config_.can_interface);
+      transport = std::make_unique<openarm::realtime::CANTransport>(
+          config_.can_interface);
     }
 
-    // Create RT-safe OpenArm interface with transport
-    openarm_rt_ = std::make_unique<openarm::realtime::OpenArm>(std::move(transport));
+    openarm_rt_ =
+        std::make_unique<openarm::realtime::OpenArm>(std::move(transport));
   } catch (const std::exception& e) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
                  "Failed to initialize OpenArm: %s", e.what());
@@ -108,45 +111,55 @@ OpenArm_v10ThrottledHardware::on_configure(
   // Add motors to RT-safe wrapper based on configuration
   for (size_t i = 0; i < controller_config_.arm_joints.size(); i++) {
     const auto& motor = controller_config_.arm_joints[i];
-    int motor_idx = openarm_rt_->add_motor(motor.type, motor.send_can_id,
+    int motor_id = openarm_rt_->add_motor(motor.type, motor.send_can_id,
                                            motor.recv_can_id);
-    if (motor_idx < 0) {
+    if (motor_id < 0) {
       RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
                    "Failed to add motor %s to RT-safe wrapper",
                    motor.name.c_str());
       return CallbackReturn::ERROR;
     }
 
-    // Calculate write interval from update rate: interval_us = 1,000,000 / rate_hz
-    motor_write_interval_us_[i] = static_cast<int64_t>(1000000.0 / motor.update_rate_hz);
+    // Store mapping from recv_can_id to joint index
+    recv_can_id_to_joint_idx_[motor.recv_can_id] = i;
+
+    // Calculate write interval from update rate: interval_us = 1,000,000 /
+    // rate_hz
+    motor_write_interval_us_[i] =
+        static_cast<int64_t>(1000000.0 / motor.update_rate_hz);
 
     RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-                "Added motor: %s (send: 0x%03X, recv: 0x%03X, rate: %.1f Hz, interval: %ld us)",
-                motor.name.c_str(), motor.send_can_id, motor.recv_can_id,
+                "Added motor: %s (motor_id=%d, joint_idx=%zu, send: 0x%03X, recv: 0x%03X, rate: %.1f Hz, "
+                "interval: %ld us)",
+                motor.name.c_str(), motor_id, i, motor.send_can_id, motor.recv_can_id,
                 motor.update_rate_hz, motor_write_interval_us_[i]);
   }
 
   // Add gripper motor if configured
   if (controller_config_.gripper_joint.has_value()) {
-    size_t gripper_idx_local = controller_config_.arm_joints.size();
-    int gripper_idx =
+    size_t gripper_joint_idx = controller_config_.arm_joints.size();
+    int gripper_motor_id =
         openarm_rt_->add_motor(controller_config_.gripper_joint->motor_type,
                                controller_config_.gripper_joint->send_can_id,
                                controller_config_.gripper_joint->recv_can_id);
-    if (gripper_idx < 0) {
+    if (gripper_motor_id < 0) {
       RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
                    "Failed to add gripper motor to RT-safe wrapper");
       return CallbackReturn::ERROR;
     }
 
+    // Store mapping from recv_can_id to joint index
+    recv_can_id_to_joint_idx_[controller_config_.gripper_joint->recv_can_id] = gripper_joint_idx;
+
     // Calculate write interval from update rate
-    motor_write_interval_us_[gripper_idx_local] =
-        static_cast<int64_t>(1000000.0 / controller_config_.gripper_joint->update_rate_hz);
+    motor_write_interval_us_[gripper_joint_idx] = static_cast<int64_t>(
+        1000000.0 / controller_config_.gripper_joint->update_rate_hz);
 
     RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-                "Added gripper motor (rate: %.1f Hz, interval: %ld us)",
+                "Added gripper motor (motor_id=%d, joint_idx=%zu, rate: %.1f Hz, interval: %ld us)",
+                gripper_motor_id, gripper_joint_idx,
                 controller_config_.gripper_joint->update_rate_hz,
-                motor_write_interval_us_[gripper_idx_local]);
+                motor_write_interval_us_[gripper_joint_idx]);
   }
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
@@ -176,7 +189,8 @@ OpenArm_v10ThrottledHardware::on_activate(
     return CallbackReturn::ERROR;
   }
 
-  // Initialize last write time for each motor to far in the past so we start writing immediately
+  // Initialize last write time for each motor to far in the past so we start
+  // writing immediately
   auto epoch = std::chrono::steady_clock::time_point();
   for (size_t i = 0; i < num_joints_; ++i) {
     last_motor_write_[i] = epoch;
@@ -293,7 +307,8 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
   size_t sent = 0;
   size_t motors_to_send = 0;
 
-  // Build list of motors that need to be updated this cycle based on their individual rates
+  // Build list of motors that need to be updated this cycle based on their
+  // individual rates
   for (size_t i = 0; i < num_joints_; i++) {
     auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
                           now - last_motor_write_[i])
@@ -328,7 +343,8 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
     // Send MIT commands (batch for motors that need updates)
     if (motors_to_send > 0) {
       stats_.can_writes++;
-      sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), motors_to_send, timeout_us);
+      sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), motors_to_send,
+                                            timeout_us);
 
       // Track per-motor sends
       for (size_t j = 0; j < sent; j++) {
@@ -342,7 +358,8 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
                            .count();
         if (elapsed >= WARN_THROTTLE_MS) {
           RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-                      "Partial MIT write: sent %zu/%zu commands", sent, motors_to_send);
+                      "Partial MIT write: sent %zu/%zu commands", sent,
+                      motors_to_send);
           last_partial_write_warn_ = now;
         }
       }
@@ -359,8 +376,8 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
     // Send position/velocity commands (batch for motors that need updates)
     if (motors_to_send > 0) {
       stats_.can_writes++;
-      sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), motors_to_send,
-                                        timeout_us);
+      sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(),
+                                               motors_to_send, timeout_us);
 
       // Track per-motor sends
       for (size_t j = 0; j < sent; j++) {
@@ -374,7 +391,8 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
                            .count();
         if (elapsed >= WARN_THROTTLE_MS) {
           RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-                      "Partial pos/vel write: sent %zu/%zu commands", sent, motors_to_send);
+                      "Partial pos/vel write: sent %zu/%zu commands", sent,
+                      motors_to_send);
           last_partial_write_warn_ = now;
         }
       }
@@ -396,14 +414,19 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
     stats_.rx_received += received;
 
     // Track per-motor receives and update cached states
-    // Note: motor_states_ is indexed by motor index, and receive_states_batch_rt
-    // places states in the correct index based on CAN ID, so we check all motors
+    // Use motor_id (recv_can_id) from StateResult and our mapping to determine joint index
     for (size_t i = 0; i < num_joints_; i++) {
       if (motor_states_[i].valid) {
-        stats_.motor_receives[i]++;
-        pos_states_[i] = motor_states_[i].position;
-        vel_states_[i] = motor_states_[i].velocity;
-        tau_states_[i] = motor_states_[i].torque;
+        uint16_t recv_can_id = motor_states_[i].motor_id;
+        if (recv_can_id < recv_can_id_to_joint_idx_.size()) {
+          int joint_idx = recv_can_id_to_joint_idx_[recv_can_id];
+          if (joint_idx >= 0 && joint_idx < static_cast<int>(num_joints_)) {
+            stats_.motor_receives[joint_idx]++;
+            pos_states_[joint_idx] = motor_states_[i].position;
+            vel_states_[joint_idx] = motor_states_[i].velocity;
+            tau_states_[joint_idx] = motor_states_[i].torque;
+          }
+        }
       }
     }
 
@@ -415,7 +438,8 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
                          .count();
       if (elapsed >= WARN_THROTTLE_MS) {
         RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-                    "Partial read: received %zu/%zu motor states", received, num_joints_);
+                    "Partial read: received %zu/%zu motor states", received,
+                    num_joints_);
         last_partial_read_warn_ = now;
       }
     }
@@ -510,7 +534,8 @@ bool OpenArm_v10ThrottledHardware::parse_config(
 
   RCLCPP_INFO(logger, "CAN Interface: %s", config_.can_interface.c_str());
   RCLCPP_INFO(logger, "CAN Timeout: %d us", config_.can_timeout_us);
-  RCLCPP_INFO(logger, "CAN FD: %s", controller_config_.can_fd ? "enabled" : "disabled");
+  RCLCPP_INFO(logger, "CAN FD: %s",
+              controller_config_.can_fd ? "enabled" : "disabled");
 
   // Parse joint configuration from URDF
   try {
@@ -549,15 +574,17 @@ bool OpenArm_v10ThrottledHardware::parse_config(
 
       // Parse update rate
       auto rate_it = joint.parameters.find("update_rate_hz");
-      motor_config.update_rate_hz =
-          (rate_it != joint.parameters.end()) ? std::stod(rate_it->second) : 150.0;
+      motor_config.update_rate_hz = (rate_it != joint.parameters.end())
+                                        ? std::stod(rate_it->second)
+                                        : 150.0;
 
       controller_config_.arm_joints.push_back(motor_config);
 
-      RCLCPP_INFO(logger,
-                  "Configured arm joint: %s (type=%d, kp=%.2f, kd=%.2f, rate=%.1f Hz)",
-                  joint.name.c_str(), static_cast<int>(motor_config.type),
-                  motor_config.kp, motor_config.kd, motor_config.update_rate_hz);
+      RCLCPP_INFO(
+          logger,
+          "Configured arm joint: %s (type=%d, kp=%.2f, kd=%.2f, rate=%.1f Hz)",
+          joint.name.c_str(), static_cast<int>(motor_config.type),
+          motor_config.kp, motor_config.kd, motor_config.update_rate_hz);
     }
 
     if (controller_config_.arm_joints.empty()) {
@@ -597,7 +624,8 @@ bool OpenArm_v10ThrottledHardware::switch_to_mit_mode() {
   }
 
   // Switch motors to MIT control mode
-  if (!openarm_rt_->set_mode_all_rt(openarm::realtime::ControlMode::MIT, 1000)) {
+  if (!openarm_rt_->set_mode_all_rt(openarm::realtime::ControlMode::MIT,
+                                    1000)) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
                  "Failed to set MIT mode on motors");
     return false;
@@ -625,7 +653,8 @@ bool OpenArm_v10ThrottledHardware::switch_to_position_mode() {
   }
 
   // Switch motors to position/velocity control mode
-  if (!openarm_rt_->set_mode_all_rt(openarm::realtime::ControlMode::POSITION_VELOCITY, 1000)) {
+  if (!openarm_rt_->set_mode_all_rt(
+          openarm::realtime::ControlMode::POSITION_VELOCITY, 1000)) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
                  "Failed to set position/velocity mode on motors");
     return false;
@@ -677,26 +706,32 @@ void OpenArm_v10ThrottledHardware::log_stats() {
   RCLCPP_INFO(logger, "  write(): %lu calls", stats_.write_count);
 
   RCLCPP_INFO(logger, "CAN operations:");
-  RCLCPP_INFO(logger, "  Batch writes:  %lu (partial: %lu)",
-              stats_.can_writes, stats_.tx_partial);
-  RCLCPP_INFO(logger, "  Batch reads:   %lu (received: %lu frames, partial: %lu, no-data: %lu)",
-              stats_.can_reads, stats_.rx_received, stats_.rx_partial, stats_.rx_no_data);
+  RCLCPP_INFO(logger, "  Batch writes:  %lu (partial: %lu)", stats_.can_writes,
+              stats_.tx_partial);
+  RCLCPP_INFO(
+      logger,
+      "  Batch reads:   %lu (received: %lu frames, partial: %lu, no-data: %lu)",
+      stats_.can_reads, stats_.rx_received, stats_.rx_partial,
+      stats_.rx_no_data);
 
   // Highlight performance issues
   if (stats_.tx_partial > 0 || stats_.rx_partial > 0 || stats_.rx_no_data > 0) {
     RCLCPP_WARN(logger, "Performance issues detected:");
     if (stats_.tx_partial > 0) {
-      double tx_partial_pct = 100.0 * stats_.tx_partial / std::max(stats_.can_writes, 1UL);
+      double tx_partial_pct =
+          100.0 * stats_.tx_partial / std::max(stats_.can_writes, 1UL);
       RCLCPP_WARN(logger, "  Partial writes: %lu (%.1f%% of writes)",
                   stats_.tx_partial, tx_partial_pct);
     }
     if (stats_.rx_partial > 0) {
-      double rx_partial_pct = 100.0 * stats_.rx_partial / std::max(stats_.can_reads, 1UL);
+      double rx_partial_pct =
+          100.0 * stats_.rx_partial / std::max(stats_.can_reads, 1UL);
       RCLCPP_WARN(logger, "  Partial reads: %lu (%.1f%% of reads)",
                   stats_.rx_partial, rx_partial_pct);
     }
     if (stats_.rx_no_data > 0) {
-      double no_data_pct = 100.0 * stats_.rx_no_data / std::max(stats_.write_count, 1UL);
+      double no_data_pct =
+          100.0 * stats_.rx_no_data / std::max(stats_.write_count, 1UL);
       RCLCPP_WARN(logger, "  No data received: %lu (%.1f%% of write cycles)",
                   stats_.rx_no_data, no_data_pct);
     }
@@ -706,21 +741,28 @@ void OpenArm_v10ThrottledHardware::log_stats() {
   RCLCPP_INFO(logger, "Per-motor statistics:");
   for (size_t i = 0; i < num_joints_; i++) {
     double expected_rate_hz = 1000000.0 / motor_write_interval_us_[i];
-    double actual_send_rate = stats_.motor_sends[i] / (double)STATS_LOG_INTERVAL_SEC;
-    double actual_recv_rate = stats_.motor_receives[i] / (double)STATS_LOG_INTERVAL_SEC;
+    double actual_send_rate =
+        stats_.motor_sends[i] / (double)STATS_LOG_INTERVAL_SEC;
+    double actual_recv_rate =
+        stats_.motor_receives[i] / (double)STATS_LOG_INTERVAL_SEC;
 
     // Warn if actual rates are significantly lower than expected
-    bool send_deficit = actual_send_rate < (expected_rate_hz * 0.9);  // More than 10% deficit
+    bool send_deficit =
+        actual_send_rate < (expected_rate_hz * 0.9);  // More than 10% deficit
     bool recv_deficit = actual_recv_rate < (expected_rate_hz * 0.9);
 
     if (send_deficit || recv_deficit) {
-      RCLCPP_WARN(logger, "  Motor %zu: sends=%lu (%.1f Hz, expected %.1f Hz), receives=%lu (%.1f Hz, expected %.1f Hz)",
+      RCLCPP_WARN(logger,
+                  "  Motor %zu: sends=%lu (%.1f Hz, expected %.1f Hz), "
+                  "receives=%lu (%.1f Hz, expected %.1f Hz)",
                   i, stats_.motor_sends[i], actual_send_rate, expected_rate_hz,
                   stats_.motor_receives[i], actual_recv_rate, expected_rate_hz);
     } else {
-      RCLCPP_INFO(logger, "  Motor %zu: sends=%lu (%.1f Hz), receives=%lu (%.1f Hz) [OK]",
-                  i, stats_.motor_sends[i], actual_send_rate,
-                  stats_.motor_receives[i], actual_recv_rate);
+      RCLCPP_INFO(
+          logger,
+          "  Motor %zu: sends=%lu (%.1f Hz), receives=%lu (%.1f Hz) [OK]", i,
+          stats_.motor_sends[i], actual_send_rate, stats_.motor_receives[i],
+          actual_recv_rate);
     }
   }
 
