@@ -176,10 +176,10 @@ OpenArm_v10ThrottledHardware::on_activate(
     return CallbackReturn::ERROR;
   }
 
-  // Initialize last write time for each motor so we start writing immediately
-  auto now = std::chrono::steady_clock::now();
+  // Initialize last write time for each motor to far in the past so we start writing immediately
+  auto epoch = std::chrono::steady_clock::time_point();
   for (size_t i = 0; i < num_joints_; ++i) {
-    last_motor_write_[i] = now;
+    last_motor_write_[i] = epoch;
   }
 
   // Add small delay to allow motors to fully initialize after enable
@@ -396,7 +396,9 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
     stats_.rx_received += received;
 
     // Track per-motor receives and update cached states
-    for (size_t i = 0; i < received && i < num_joints_; i++) {
+    // Note: motor_states_ is indexed by motor index, and receive_states_batch_rt
+    // places states in the correct index based on CAN ID, so we check all motors
+    for (size_t i = 0; i < num_joints_; i++) {
       if (motor_states_[i].valid) {
         stats_.motor_receives[i]++;
         pos_states_[i] = motor_states_[i].position;
