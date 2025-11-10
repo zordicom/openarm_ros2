@@ -485,8 +485,17 @@ bool OpenArm_v10ThrottledHardware::parse_config(
     config_.can_timeout_us = std::stoi(it->second);
   }
 
+  // Parse CAN FD flag
+  it = info.hardware_parameters.find("can_fd");
+  if (it != info.hardware_parameters.end()) {
+    controller_config_.can_fd = parse_bool_param(it->second);
+  } else {
+    controller_config_.can_fd = false;  // Default to standard CAN
+  }
+
   RCLCPP_INFO(logger, "CAN Interface: %s", config_.can_interface.c_str());
   RCLCPP_INFO(logger, "CAN Timeout: %d us", config_.can_timeout_us);
+  RCLCPP_INFO(logger, "CAN FD: %s", controller_config_.can_fd ? "enabled" : "disabled");
 
   // Parse joint configuration from URDF
   try {
