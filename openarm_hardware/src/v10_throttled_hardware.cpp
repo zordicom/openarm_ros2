@@ -19,6 +19,8 @@
 #include <sstream>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
+#include "openarm/realtime/can_transport.hpp"
+#include "openarm/realtime/canfd_transport.hpp"
 #include "rclcpp/logging.hpp"
 #include "realtime_tools/realtime_helpers.hpp"
 
@@ -27,11 +29,15 @@ namespace openarm_hardware {
 OpenArm_v10ThrottledHardware::OpenArm_v10ThrottledHardware() {
   // Initialize timestamps
   auto now = std::chrono::steady_clock::now();
-  last_can_write_ = now;
   last_stats_log_ = now;
   last_partial_write_warn_ = now;
   last_partial_read_warn_ = now;
   last_no_data_warn_ = now;
+
+  // Initialize per-motor timestamps to epoch (will be updated on first write)
+  std::fill(last_motor_write_.begin(), last_motor_write_.end(),
+            std::chrono::steady_clock::time_point());
+  std::fill(motor_write_interval_us_.begin(), motor_write_interval_us_.end(), 0);
 }
 
 OpenArm_v10ThrottledHardware::CallbackReturn
@@ -76,17 +82,32 @@ OpenArm_v10ThrottledHardware::on_init(
 OpenArm_v10ThrottledHardware::CallbackReturn
 OpenArm_v10ThrottledHardware::on_configure(
     const rclcpp_lifecycle::State& /*previous_state*/) {
-  // Create RT-safe OpenArm interface
-  openarm_rt_ = std::make_unique<openarm::realtime::OpenArm>();
+  // Create appropriate transport (CAN or CAN-FD)
+  try {
+    std::unique_ptr<openarm::realtime::IOpenArmTransport> transport;
+    if (controller_config_.can_fd) {
+      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                  "Initializing with CAN-FD transport on %s",
+                  config_.can_interface.c_str());
+      transport = std::make_unique<openarm::realtime::CANFDTransport>(config_.can_interface);
+    } else {
+      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                  "Initializing with standard CAN transport on %s",
+                  config_.can_interface.c_str());
+      transport = std::make_unique<openarm::realtime::CANTransport>(config_.can_interface);
+    }
 
-  if (!openarm_rt_->init(config_.can_interface)) {
+    // Create RT-safe OpenArm interface with transport
+    openarm_rt_ = std::make_unique<openarm::realtime::OpenArm>(std::move(transport));
+  } catch (const std::exception& e) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-                 "Failed to initialize RT-safe OpenArm interface");
+                 "Failed to initialize OpenArm: %s", e.what());
     return CallbackReturn::ERROR;
   }
 
   // Add motors to RT-safe wrapper based on configuration
-  for (const auto& motor : controller_config_.arm_joints) {
+  for (size_t i = 0; i < controller_config_.arm_joints.size(); i++) {
+    const auto& motor = controller_config_.arm_joints[i];
     int motor_idx = openarm_rt_->add_motor(motor.type, motor.send_can_id,
                                            motor.recv_can_id);
     if (motor_idx < 0) {
@@ -95,13 +116,19 @@ OpenArm_v10ThrottledHardware::on_configure(
                    motor.name.c_str());
       return CallbackReturn::ERROR;
     }
+
+    // Calculate write interval from update rate: interval_us = 1,000,000 / rate_hz
+    motor_write_interval_us_[i] = static_cast<int64_t>(1000000.0 / motor.update_rate_hz);
+
     RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-                "Added motor: %s (send: 0x%03X, recv: 0x%03X)",
-                motor.name.c_str(), motor.send_can_id, motor.recv_can_id);
+                "Added motor: %s (send: 0x%03X, recv: 0x%03X, rate: %.1f Hz, interval: %ld us)",
+                motor.name.c_str(), motor.send_can_id, motor.recv_can_id,
+                motor.update_rate_hz, motor_write_interval_us_[i]);
   }
 
   // Add gripper motor if configured
   if (controller_config_.gripper_joint.has_value()) {
+    size_t gripper_idx_local = controller_config_.arm_joints.size();
     int gripper_idx =
         openarm_rt_->add_motor(controller_config_.gripper_joint->motor_type,
                                controller_config_.gripper_joint->send_can_id,
@@ -111,8 +138,15 @@ OpenArm_v10ThrottledHardware::on_configure(
                    "Failed to add gripper motor to RT-safe wrapper");
       return CallbackReturn::ERROR;
     }
+
+    // Calculate write interval from update rate
+    motor_write_interval_us_[gripper_idx_local] =
+        static_cast<int64_t>(1000000.0 / controller_config_.gripper_joint->update_rate_hz);
+
     RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-                "Added gripper motor");
+                "Added gripper motor (rate: %.1f Hz, interval: %ld us)",
+                controller_config_.gripper_joint->update_rate_hz,
+                motor_write_interval_us_[gripper_idx_local]);
   }
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
@@ -248,71 +282,92 @@ hardware_interface::return_type OpenArm_v10ThrottledHardware::write(
     const rclcpp::Time& /*time*/, const rclcpp::Duration& period) {
   stats_.write_count++;
 
-  // Check if we should throttle this write
   auto now = std::chrono::steady_clock::now();
-
-  // Time to write to CAN bus
-  stats_.can_writes++;
-  last_can_write_ = now;
 
   // Use controller period as timeout (convert to microseconds)
   int timeout_us = static_cast<int>(period.seconds() * 1e6);
 
   size_t sent = 0;
-  // Send commands based on current mode
+  size_t motors_to_send = 0;
+
+  // Build list of motors that need to be updated this cycle based on their individual rates
+  for (size_t i = 0; i < num_joints_; i++) {
+    auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                          now - last_motor_write_[i])
+                          .count();
+
+    // Check if it's time to update this motor
+    if (elapsed_us >= motor_write_interval_us_[i]) {
+      motors_to_update_[motors_to_send++] = i;
+      last_motor_write_[i] = now;
+    }
+  }
+
+  // Send commands based on current mode (only for motors that need updates)
   if (current_mode_ == ControlMode::MIT) {
-    // Pack MIT commands for all joints (arm + gripper if configured)
-    for (size_t i = 0; i < num_joints_; i++) {
-      mit_params_[i].q = pos_commands_[i];
-      mit_params_[i].dq = vel_commands_[i];
-      mit_params_[i].tau = tau_commands_[i];
+    // Pack MIT commands for motors that need updates
+    for (size_t j = 0; j < motors_to_send; j++) {
+      size_t i = motors_to_update_[j];
+      mit_params_[j].q = pos_commands_[i];
+      mit_params_[j].dq = vel_commands_[i];
+      mit_params_[j].tau = tau_commands_[i];
 
       // Use arm joint gains or gripper gains
       if (i < controller_config_.arm_joints.size()) {
-        mit_params_[i].kp = controller_config_.arm_joints[i].kp;
-        mit_params_[i].kd = controller_config_.arm_joints[i].kd;
+        mit_params_[j].kp = controller_config_.arm_joints[i].kp;
+        mit_params_[j].kd = controller_config_.arm_joints[i].kd;
       } else if (controller_config_.gripper_joint.has_value()) {
-        mit_params_[i].kp = controller_config_.gripper_joint->kp;
-        mit_params_[i].kd = controller_config_.gripper_joint->kd;
+        mit_params_[j].kp = controller_config_.gripper_joint->kp;
+        mit_params_[j].kd = controller_config_.gripper_joint->kd;
       }
     }
 
-    // Send MIT commands (batch)
-    sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_, timeout_us);
-    if (sent < num_joints_) {
-      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         now - last_partial_write_warn_)
-                         .count();
-      if (elapsed >= WARN_THROTTLE_MS) {
-        RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-                    "Partial MIT write: sent %zu/%zu commands", sent, num_joints_);
-        last_partial_write_warn_ = now;
+    // Send MIT commands (batch for motors that need updates)
+    if (motors_to_send > 0) {
+      stats_.can_writes++;
+      sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), motors_to_send, timeout_us);
+      if (sent < motors_to_send) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           now - last_partial_write_warn_)
+                           .count();
+        if (elapsed >= WARN_THROTTLE_MS) {
+          RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                      "Partial MIT write: sent %zu/%zu commands", sent, motors_to_send);
+          last_partial_write_warn_ = now;
+        }
       }
     }
 
   } else if (current_mode_ == ControlMode::POSITION_VELOCITY) {
-    // Pack position/velocity commands for all joints
-    for (size_t i = 0; i < num_joints_; i++) {
-      posvel_params_[i].q = pos_commands_[i];
-      posvel_params_[i].dq = vel_commands_[i];
+    // Pack position/velocity commands for motors that need updates
+    for (size_t j = 0; j < motors_to_send; j++) {
+      size_t i = motors_to_update_[j];
+      posvel_params_[j].q = pos_commands_[i];
+      posvel_params_[j].dq = vel_commands_[i];
     }
 
-    // Send position/velocity commands (batch)
-    sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
-                                      timeout_us);
-    if (sent < num_joints_) {
-      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         now - last_partial_write_warn_)
-                         .count();
-      if (elapsed >= WARN_THROTTLE_MS) {
-        RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
-                    "Partial pos/vel write: sent %zu/%zu commands", sent, num_joints_);
-        last_partial_write_warn_ = now;
+    // Send position/velocity commands (batch for motors that need updates)
+    if (motors_to_send > 0) {
+      stats_.can_writes++;
+      sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), motors_to_send,
+                                        timeout_us);
+      if (sent < motors_to_send) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           now - last_partial_write_warn_)
+                           .count();
+        if (elapsed >= WARN_THROTTLE_MS) {
+          RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10ThrottledHardware"),
+                      "Partial pos/vel write: sent %zu/%zu commands", sent, motors_to_send);
+          last_partial_write_warn_ = now;
+        }
       }
     }
   } else {
-    // No active controller - send refresh command
-    openarm_rt_->refresh_all_motors_rt(timeout_us);
+    // No active controller - send refresh command for motors that need updates
+    if (motors_to_send > 0) {
+      stats_.can_writes++;
+      openarm_rt_->refresh_all_motors_rt(timeout_us);
+    }
   }
 
   // After sending commands, read back the motor states
@@ -462,12 +517,17 @@ bool OpenArm_v10ThrottledHardware::parse_config(
       motor_config.kd =
           (kd_it != joint.parameters.end()) ? std::stod(kd_it->second) : 0.0;
 
+      // Parse update rate
+      auto rate_it = joint.parameters.find("update_rate_hz");
+      motor_config.update_rate_hz =
+          (rate_it != joint.parameters.end()) ? std::stod(rate_it->second) : 150.0;
+
       controller_config_.arm_joints.push_back(motor_config);
 
       RCLCPP_INFO(logger,
-                  "Configured arm joint: %s (type=%d, kp=%.2f, kd=%.2f)",
+                  "Configured arm joint: %s (type=%d, kp=%.2f, kd=%.2f, rate=%.1f Hz)",
                   joint.name.c_str(), static_cast<int>(motor_config.type),
-                  motor_config.kp, motor_config.kd);
+                  motor_config.kp, motor_config.kd, motor_config.update_rate_hz);
     }
 
     if (controller_config_.arm_joints.empty()) {

@@ -39,6 +39,7 @@ struct MotorConfig {
   double kp;            // Used in MIT mode
   double kd;            // Used in MIT mode
   double max_velocity;  // Max velocity for position mode (rad/s)
+  double update_rate_hz = 150.0;  // Update rate for this motor (Hz)
 };
 
 // Similar to motor config, but with a few extra parameters to convert between
@@ -55,6 +56,7 @@ struct GripperConfig {
   double motor_closed_radians;
   double motor_open_radians;
   double max_velocity;  // Max velocity for position mode
+  double update_rate_hz = 150.0;  // Update rate for this motor (Hz)
 
   // Maps joint [0, 1] to motor radians
   double to_radians(double joint_value) const;

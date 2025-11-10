@@ -113,9 +113,10 @@ class OpenArm_v10ThrottledHardware : public hardware_interface::SystemInterface 
   // RT-safe OpenArm interface
   std::unique_ptr<openarm::realtime::OpenArm> openarm_rt_;
 
-  // Throttling for CAN writes (reads are always non-blocking)
-  std::chrono::steady_clock::time_point last_can_write_;
-  static constexpr int64_t CAN_WRITE_INTERVAL_US = 2800;  // ~357 Hz (writes every controller cycle)
+  // Per-motor throttling for variable rate refresh
+  std::array<std::chrono::steady_clock::time_point, MAX_JOINTS> last_motor_write_;
+  std::array<int64_t, MAX_JOINTS> motor_write_interval_us_;  // Calculated from update_rate_hz
+  std::array<size_t, MAX_JOINTS> motors_to_update_;  // Pre-allocated buffer for tracking which motors to update
 
   // Performance stats
   struct Stats {

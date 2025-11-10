@@ -23,6 +23,9 @@
 #include <chrono>
 #include <cmath>
 #include <fstream>
+
+#include "openarm/realtime/can_transport.hpp"
+#include "openarm/realtime/canfd_transport.hpp"
 #include <sstream>
 #include <thread>
 
@@ -84,12 +87,26 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_init(
 
 OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_configure(
     const rclcpp_lifecycle::State& /*previous_state*/) {
-  // Create RT-safe OpenArm interface
-  openarm_rt_ = std::make_unique<openarm::realtime::OpenArm>();
+  // Create appropriate transport (CAN or CAN-FD)
+  try {
+    std::unique_ptr<openarm::realtime::IOpenArmTransport> transport;
+    if (controller_config_.can_fd) {
+      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                  "Initializing with CAN-FD transport on %s",
+                  config_.can_interface.c_str());
+      transport = std::make_unique<openarm::realtime::CANFDTransport>(config_.can_interface);
+    } else {
+      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                  "Initializing with standard CAN transport on %s",
+                  config_.can_interface.c_str());
+      transport = std::make_unique<openarm::realtime::CANTransport>(config_.can_interface);
+    }
 
-  if (!openarm_rt_->init(config_.can_interface)) {
+    // Create RT-safe OpenArm interface with transport
+    openarm_rt_ = std::make_unique<openarm::realtime::OpenArm>(std::move(transport));
+  } catch (const std::exception& e) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                 "Failed to initialize RT-safe OpenArm interface");
+                 "Failed to initialize OpenArm: %s", e.what());
     return CallbackReturn::ERROR;
   }
 
