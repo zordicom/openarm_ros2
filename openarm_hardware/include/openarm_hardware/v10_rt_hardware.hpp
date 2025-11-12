@@ -16,12 +16,11 @@
 #define OPENARM_HARDWARE__V10_RT_HARDWARE_HPP_
 
 #include <array>
-#include <atomic>
+#include <chrono>
 #include <memory>
 #include <openarm/realtime/openarm.hpp>
 #include <openarm/damiao_motor/dm_motor.hpp>
 #include <openarm/damiao_motor/dm_motor_control.hpp>
-#include <thread>
 #include <vector>
 
 #include "hardware_interface/handle.hpp"
@@ -32,7 +31,6 @@
 #include "openarm_hardware/hardware_config.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/state.hpp"
-#include "realtime_tools/realtime_buffer.hpp"
 
 namespace openarm_hardware {
 
@@ -42,16 +40,12 @@ constexpr size_t MAX_JOINTS = 10;
 /**
  * @brief RT-safe OpenArm V10 Hardware Interface
  *
- * This implementation uses a two-thread RT architecture:
- * - High-priority RT thread: Runs read()/write() methods, must complete <100us
- * - Lower-priority RT thread: Handles CAN communication at ~600Hz
- *
- * Key RT-safety features:
- * - Pre-allocates all buffers
- * - Uses non-blocking CAN operations with timeouts
- * - Moves mode switching to lower-priority RT worker thread
- * - Uses RealtimeBuffer for lock-free thread-safe data exchange
- * - Uses RT-safe throttled logging
+ * Key design principles:
+ * - No worker threads - everything happens in read()/write() calls
+ * - write() sends CAN writes and reads responses in same cycle
+ * - read() returns cached motor states
+ * - Controller runs at high frequency (e.g. 1000 Hz)
+ * - Latest motor states cached and returned to controller at every read()
  */
 class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
  public:
@@ -110,89 +104,50 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
   std::array<openarm::damiao_motor::MITParam, MAX_JOINTS> mit_params_{};
   std::array<openarm::damiao_motor::PosVelParam, MAX_JOINTS> posvel_params_{};
 
-  // RT-safe data exchange structures
-  struct CommandData {
-    std::array<double, MAX_JOINTS> positions;
-    std::array<double, MAX_JOINTS> velocities;
-    std::array<double, MAX_JOINTS> torques;
-    ControlMode mode;
-    bool valid;
-  };
-
-  struct StateData {
-    std::array<double, MAX_JOINTS> positions;
-    std::array<double, MAX_JOINTS> velocities;
-    std::array<double, MAX_JOINTS> torques;
-    std::array<uint8_t, MAX_JOINTS> error_codes;
-    bool valid;
-  };
-
-  // Realtime buffers for thread-safe data exchange
-  realtime_tools::RealtimeBuffer<CommandData> command_buffer_;
-  realtime_tools::RealtimeBuffer<StateData> state_buffer_;
-
-  // Flag to request mode switch from non-RT thread
-  std::atomic<bool> mode_switch_requested_{false};
+  // Pre-allocated CAN read buffer
+  std::array<openarm::damiao_motor::StateResult, MAX_JOINTS> motor_states_{};
 
   // Control mode management
-  std::atomic<ControlMode> current_mode_{ControlMode::UNINITIALIZED};
-  std::atomic<ControlMode> pending_mode_{ControlMode::UNINITIALIZED};
+  ControlMode current_mode_{ControlMode::UNINITIALIZED};
 
   // RT-safe OpenArm interface
   std::unique_ptr<openarm::realtime::OpenArm> openarm_rt_;
 
-  // Lower-priority RT worker thread for CAN communication
-  std::thread can_worker_thread_;
-  std::atomic<bool> worker_running_{false};
+  // Performance stats
+  struct Stats {
+    uint64_t read_count{0};
+    uint64_t write_count{0};
+    uint64_t can_writes{0};
+    uint64_t can_reads{0};
+    uint64_t tx_skipped{0};     // Write cycles skipped due to throttling
+    uint64_t tx_partial{0};     // Partial writes (not all motors sent)
+    uint64_t rx_no_data{0};     // Read cycles with no data available
+    uint64_t rx_received{0};    // Successful motor state reads
+    uint64_t rx_partial{0};     // Partial reads (not all motors received)
 
-  // RT performance statistics
-  struct RTStats {
-    std::atomic<uint64_t> max_read_ns{0};
-    std::atomic<uint64_t> max_write_ns{0};
-    std::atomic<uint64_t> max_worker_cycle_ns{0};
-    std::atomic<uint64_t> worker_deadline_misses{0};
-    std::atomic<uint64_t> read_count{0};
-    std::atomic<uint64_t> write_count{0};
-    std::atomic<uint64_t> worker_cycles{0};
-    std::atomic<uint64_t> tx_dropped{0};  // Frames dropped due to TX buffer full
-    std::atomic<uint64_t> rx_dropped{0};  // Frames not received (missing feedback)
-    // Running averages (stored as sum for lock-free updates)
-    std::atomic<uint64_t> total_read_ns{0};
-    std::atomic<uint64_t> total_write_ns{0};
-    std::atomic<uint64_t> total_worker_cycle_ns{0};
+    // Per-motor tracking
+    std::array<uint64_t, MAX_JOINTS> motor_sends{};     // Commands sent to each motor
+    std::array<uint64_t, MAX_JOINTS> motor_receives{};  // States received from each motor
   };
-  RTStats rt_stats_;
+  Stats stats_;
 
   // Stats logging
   std::chrono::steady_clock::time_point last_stats_log_;
-  static constexpr int STATS_LOG_INTERVAL_SEC = 10;  // Log stats every 10 seconds
+  static constexpr int STATS_LOG_INTERVAL_SEC = 10;
 
-  // RT-safe logging (using throttled macros)
-  static constexpr int LOG_THROTTLE_MS = 1000;  // Log at most once per second
+  // Warning throttling (RT-safe)
+  std::chrono::steady_clock::time_point last_partial_write_warn_;
+  std::chrono::steady_clock::time_point last_partial_read_warn_;
+  std::chrono::steady_clock::time_point last_no_data_warn_;
+  static constexpr int64_t WARN_THROTTLE_MS = 1000;
 
   // Helper methods
   bool parse_config(const hardware_interface::HardwareInfo& info);
-  bool load_motor_config_from_yaml(const std::string& file_path);
-  bool generate_joint_names();
-
-  // CAN worker thread function
-  void can_worker_loop();
-
-  // Mode switching helpers (called from async handler)
-  bool perform_mode_switch_async();
   bool switch_to_mit_mode();
   bool switch_to_position_mode();
-
-  // RT-safe command/state helpers
-  bool send_commands_rt();
-  bool receive_states_rt();
-
-  // Determine control mode from interfaces
   ControlMode determine_mode_from_interfaces(
       const std::vector<std::string>& interfaces);
-
-  // Log RT performance statistics (called periodically from worker thread)
-  void log_rt_stats();
+  void log_stats();
 };
 
 }  // namespace openarm_hardware
