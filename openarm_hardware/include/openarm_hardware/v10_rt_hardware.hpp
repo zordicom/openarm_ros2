@@ -18,9 +18,9 @@
 #include <array>
 #include <chrono>
 #include <memory>
-#include <openarm/realtime/openarm.hpp>
 #include <openarm/damiao_motor/dm_motor.hpp>
 #include <openarm/damiao_motor/dm_motor_control.hpp>
+#include <openarm/realtime/openarm.hpp>
 #include <vector>
 
 #include "hardware_interface/handle.hpp"
@@ -35,7 +35,7 @@
 namespace openarm_hardware {
 
 // Maximum supported joints for pre-allocation
-constexpr size_t MAX_JOINTS = 10;
+constexpr ssize_t MAX_JOINTS = 10;
 
 /**
  * @brief RT-safe OpenArm V10 Hardware Interface
@@ -90,7 +90,7 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
   HardwareConfig config_;
   ControllerConfig controller_config_;
   std::vector<std::string> joint_names_;
-  size_t num_joints_{0};
+  ssize_t num_joints_{0};
 
   // Pre-allocated state and command buffers
   std::array<double, MAX_JOINTS> pos_states_{};
@@ -119,15 +119,17 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
     uint64_t write_count{0};
     uint64_t can_writes{0};
     uint64_t can_reads{0};
-    uint64_t tx_skipped{0};     // Write cycles skipped due to throttling
-    uint64_t tx_partial{0};     // Partial writes (not all motors sent)
-    uint64_t rx_no_data{0};     // Read cycles with no data available
-    uint64_t rx_received{0};    // Successful motor state reads
-    uint64_t rx_partial{0};     // Partial reads (not all motors received)
+    uint64_t tx_skipped{0};   // Write cycles skipped due to throttling
+    uint64_t tx_partial{0};   // Partial writes (not all motors sent)
+    uint64_t rx_no_data{0};   // Read cycles with no data available
+    uint64_t rx_received{0};  // Successful motor state reads
+    uint64_t rx_partial{0};   // Partial reads (not all motors received)
 
     // Per-motor tracking
-    std::array<uint64_t, MAX_JOINTS> motor_sends{};     // Commands sent to each motor
-    std::array<uint64_t, MAX_JOINTS> motor_receives{};  // States received from each motor
+    std::array<uint64_t, MAX_JOINTS>
+        motor_sends{};  // Commands sent to each motor
+    std::array<uint64_t, MAX_JOINTS>
+        motor_receives{};  // States received from each motor
   };
   Stats stats_;
 

@@ -35,8 +35,7 @@ OpenArm_v10RTHardware::OpenArm_v10RTHardware() {
   last_no_data_warn_ = now;
 }
 
-OpenArm_v10RTHardware::CallbackReturn
-OpenArm_v10RTHardware::on_init(
+OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_init(
     const hardware_interface::HardwareInfo& info) {
   if (hardware_interface::SystemInterface::on_init(info) !=
       CallbackReturn::SUCCESS) {
@@ -74,8 +73,7 @@ OpenArm_v10RTHardware::on_init(
   return CallbackReturn::SUCCESS;
 }
 
-OpenArm_v10RTHardware::CallbackReturn
-OpenArm_v10RTHardware::on_configure(
+OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_configure(
     const rclcpp_lifecycle::State& /*previous_state*/) {
   try {
     std::unique_ptr<openarm::realtime::IOpenArmTransport> transport;
@@ -105,7 +103,7 @@ OpenArm_v10RTHardware::on_configure(
   for (size_t i = 0; i < controller_config_.arm_joints.size(); i++) {
     const auto& motor = controller_config_.arm_joints[i];
     int motor_id = openarm_rt_->add_motor(motor.type, motor.send_can_id,
-                                           motor.recv_can_id);
+                                          motor.recv_can_id);
     if (motor_id < 0) {
       RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
                    "Failed to add motor %s to RT-safe wrapper",
@@ -114,8 +112,10 @@ OpenArm_v10RTHardware::on_configure(
     }
 
     RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                "Added motor: %s (motor_id=%d, joint_idx=%zu, send: 0x%03X, recv: 0x%03X)",
-                motor.name.c_str(), motor_id, i, motor.send_can_id, motor.recv_can_id);
+                "Added motor: %s (motor_id=%d, joint_idx=%zu, send: 0x%03X, "
+                "recv: 0x%03X)",
+                motor.name.c_str(), motor_id, i, motor.send_can_id,
+                motor.recv_can_id);
   }
 
   // Add gripper motor if configured
@@ -142,8 +142,7 @@ OpenArm_v10RTHardware::on_configure(
   return CallbackReturn::SUCCESS;
 }
 
-OpenArm_v10RTHardware::CallbackReturn
-OpenArm_v10RTHardware::on_activate(
+OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_activate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
   // Check if RT kernel is available
   if (!realtime_tools::has_realtime_kernel()) {
@@ -155,10 +154,16 @@ OpenArm_v10RTHardware::on_activate(
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
               "Enabling motors on activation");
 
-  size_t enabled = openarm_rt_->enable_all_motors_rt(5000);
-  if (enabled != num_joints_) {
+  ssize_t enabled = openarm_rt_->enable_all_motors_rt(5000);
+  if (enabled < 0) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                 "Failed to enable all motors: %zu/%zu", enabled,
+                 "Enable motors send failed with errno %d: %s", errno,
+                 strerror(errno));
+    return CallbackReturn::ERROR;
+  }
+  if (enabled != static_cast<ssize_t>(num_joints_)) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                 "Failed to enable all motors: %zd/%zu", enabled,
                  openarm_rt_->get_motor_count());
     return CallbackReturn::ERROR;
   }
@@ -171,17 +176,17 @@ OpenArm_v10RTHardware::on_activate(
     // Busy wait for 100ms
   }
 
-  size_t received = openarm_rt_->receive_states_batch_rt(
+  ssize_t received = openarm_rt_->receive_states_batch_rt(
       motor_states_.data(), openarm_rt_->get_motor_count(), 5000);
 
   if (received != num_joints_) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                 "Failed to get initial state for all motors: %zu/%zu",
+                 "Failed to get initial state for all motors: %zd/%zd",
                  received, num_joints_);
     return CallbackReturn::ERROR;
   }
 
-  for (size_t i = 0; i < received; i++) {
+  for (ssize_t i = 0; i < received; i++) {
     if (motor_states_[i].valid) {
       pos_states_[i] = motor_states_[i].position;
       vel_states_[i] = motor_states_[i].velocity;
@@ -198,8 +203,7 @@ OpenArm_v10RTHardware::on_activate(
   return CallbackReturn::SUCCESS;
 }
 
-OpenArm_v10RTHardware::CallbackReturn
-OpenArm_v10RTHardware::on_deactivate(
+OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_deactivate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
   // Disable motors
   if (openarm_rt_) {
@@ -216,7 +220,7 @@ std::vector<hardware_interface::StateInterface>
 OpenArm_v10RTHardware::export_state_interfaces() {
   std::vector<hardware_interface::StateInterface> state_interfaces;
 
-  for (size_t i = 0; i < num_joints_; i++) {
+  for (ssize_t i = 0; i < num_joints_; i++) {
     state_interfaces.emplace_back(
         joint_names_[i], hardware_interface::HW_IF_POSITION, &pos_states_[i]);
     state_interfaces.emplace_back(
@@ -232,7 +236,7 @@ std::vector<hardware_interface::CommandInterface>
 OpenArm_v10RTHardware::export_command_interfaces() {
   std::vector<hardware_interface::CommandInterface> command_interfaces;
 
-  for (size_t i = 0; i < num_joints_; i++) {
+  for (ssize_t i = 0; i < num_joints_; i++) {
     command_interfaces.emplace_back(
         joint_names_[i], hardware_interface::HW_IF_POSITION, &pos_commands_[i]);
     command_interfaces.emplace_back(
@@ -271,18 +275,18 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
   // Use controller period as timeout (convert to microseconds)
   int timeout_us = static_cast<int>(period.seconds() * 1e6);
 
-  size_t sent = 0;
+  ssize_t sent = 0;
 
   // Send commands based on current mode (to all motors every cycle)
   if (current_mode_ == ControlMode::MIT) {
     // Pack MIT commands for all motors
-    for (size_t i = 0; i < num_joints_; i++) {
+    for (ssize_t i = 0; i < num_joints_; i++) {
       mit_params_[i].q = pos_commands_[i];
       mit_params_[i].dq = vel_commands_[i];
       mit_params_[i].tau = tau_commands_[i];
 
       // Use arm joint gains or gripper gains
-      if (i < controller_config_.arm_joints.size()) {
+      if (i < static_cast<ssize_t>(controller_config_.arm_joints.size())) {
         mit_params_[i].kp = controller_config_.arm_joints[i].kp;
         mit_params_[i].kd = controller_config_.arm_joints[i].kd;
       } else if (controller_config_.gripper_joint.has_value()) {
@@ -291,59 +295,39 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
       }
     }
 
-    // Send MIT commands (batch for all motors)
     stats_.can_writes++;
-    sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_, timeout_us);
-
-    // Track per-motor sends
-    for (size_t i = 0; i < sent; i++) {
-      stats_.motor_sends[i]++;
-    }
-
-    if (sent < num_joints_) {
-      stats_.tx_partial++;
-      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         now - last_partial_write_warn_)
-                         .count();
-      if (elapsed >= WARN_THROTTLE_MS) {
-        RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                    "Partial MIT write: sent %zu/%zu commands", sent, num_joints_);
-        last_partial_write_warn_ = now;
-      }
-    }
+    sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_,
+                                          timeout_us);
 
   } else if (current_mode_ == ControlMode::POSITION_VELOCITY) {
-    // Pack position/velocity commands for all motors
-    for (size_t i = 0; i < num_joints_; i++) {
+    for (ssize_t i = 0; i < num_joints_; i++) {
       posvel_params_[i].q = pos_commands_[i];
       posvel_params_[i].dq = vel_commands_[i];
     }
 
-    // Send position/velocity commands (batch for all motors)
     stats_.can_writes++;
-    sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_, timeout_us);
+    sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
+                                             timeout_us);
+  } else {
+    stats_.can_writes++;
+    sent = openarm_rt_->refresh_all_motors_rt(timeout_us);
+  }
 
-    // Track per-motor sends
-    for (size_t i = 0; i < sent; i++) {
-      stats_.motor_sends[i]++;
-    }
+  if (sent >= 0 && sent < num_joints_) {
+    stats_.tx_partial++;
+  }
 
-    if (sent < num_joints_) {
-      stats_.tx_partial++;
-      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         now - last_partial_write_warn_)
-                         .count();
-      if (elapsed >= WARN_THROTTLE_MS) {
-        RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                    "Partial pos/vel write: sent %zu/%zu commands", sent, num_joints_);
-        last_partial_write_warn_ = now;
-      }
-    }
+  // Check for send errors
+  if (sent < 0) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                 "Position/velocity send failed with errno %d: %s", errno,
+                 strerror(errno));
+    return hardware_interface::return_type::ERROR;
   }
 
   // After sending commands, read back the motor states
-  size_t received = openarm_rt_->receive_states_batch_rt(
-      motor_states_.data(), num_joints_, timeout_us);
+  auto received = openarm_rt_->receive_states_batch_rt(motor_states_.data(),
+                                                       num_joints_, timeout_us);
 
   if (received > 0) {
     stats_.can_reads++;
@@ -351,7 +335,7 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
 
     // Update cached states from received motor states
     // States are returned in motor order (matching the order they were added)
-    for (size_t i = 0; i < received; i++) {
+    for (ssize_t i = 0; i < received; i++) {
       if (motor_states_[i].valid) {
         stats_.motor_receives[i]++;
         pos_states_[i] = motor_states_[i].position;
@@ -504,11 +488,10 @@ bool OpenArm_v10RTHardware::parse_config(
 
       controller_config_.arm_joints.push_back(motor_config);
 
-      RCLCPP_INFO(
-          logger,
-          "Configured arm joint: %s (type=%d, kp=%.2f, kd=%.2f)",
-          joint.name.c_str(), static_cast<int>(motor_config.type),
-          motor_config.kp, motor_config.kd);
+      RCLCPP_INFO(logger,
+                  "Configured arm joint: %s (type=%d, kp=%.2f, kd=%.2f)",
+                  joint.name.c_str(), static_cast<int>(motor_config.type),
+                  motor_config.kp, motor_config.kd);
     }
 
     if (controller_config_.arm_joints.empty()) {
@@ -524,7 +507,7 @@ bool OpenArm_v10RTHardware::parse_config(
     if (controller_config_.gripper_joint.has_value()) {
       joint_names_.push_back(controller_config_.gripper_joint->name);
     }
-    num_joints_ = joint_names_.size();
+    num_joints_ = static_cast<ssize_t>(joint_names_.size());
 
     RCLCPP_INFO(logger, "Configured %zu total joints",
                 controller_config_.arm_joints.size());
@@ -556,7 +539,7 @@ bool OpenArm_v10RTHardware::switch_to_mit_mode() {
   }
 
   // Initialize commands to current positions to avoid jumps
-  for (size_t i = 0; i < num_joints_; i++) {
+  for (ssize_t i = 0; i < num_joints_; i++) {
     pos_commands_[i] = pos_states_[i];
     vel_commands_[i] = 0.0;
     tau_commands_[i] = 0.0;
@@ -585,7 +568,7 @@ bool OpenArm_v10RTHardware::switch_to_position_mode() {
   }
 
   // Initialize commands to current positions
-  for (size_t i = 0; i < num_joints_; i++) {
+  for (ssize_t i = 0; i < num_joints_; i++) {
     pos_commands_[i] = pos_states_[i];
     vel_commands_[i] = 0.0;
   }
@@ -663,14 +646,15 @@ void OpenArm_v10RTHardware::log_stats() {
 
   // Log per-motor send/receive counts
   RCLCPP_INFO(logger, "Per-motor statistics:");
-  for (size_t i = 0; i < num_joints_; i++) {
+  for (ssize_t i = 0; i < num_joints_; i++) {
     double actual_send_rate =
         stats_.motor_sends[i] / (double)STATS_LOG_INTERVAL_SEC;
     double actual_recv_rate =
         stats_.motor_receives[i] / (double)STATS_LOG_INTERVAL_SEC;
 
-    RCLCPP_INFO(logger, "  Motor %zu: sends=%lu (%.1f Hz), receives=%lu (%.1f Hz)",
-                i, stats_.motor_sends[i], actual_send_rate,
+    RCLCPP_INFO(logger,
+                "  Motor %zu: sends=%lu (%.1f Hz), receives=%lu (%.1f Hz)", i,
+                stats_.motor_sends[i], actual_send_rate,
                 stats_.motor_receives[i], actual_recv_rate);
   }
 
