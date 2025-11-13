@@ -99,6 +99,8 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
   std::array<double, MAX_JOINTS> pos_commands_{};
   std::array<double, MAX_JOINTS> vel_commands_{};
   std::array<double, MAX_JOINTS> tau_commands_{};
+  std::array<double, MAX_JOINTS> kp_commands_{};
+  std::array<double, MAX_JOINTS> kd_commands_{};
 
   // Pre-allocated CAN command buffers
   std::array<openarm::damiao_motor::MITParam, MAX_JOINTS> mit_params_{};

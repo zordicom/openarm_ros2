@@ -64,6 +64,8 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_init(
   std::fill(pos_commands_.begin(), pos_commands_.end(), 0.0);
   std::fill(vel_commands_.begin(), vel_commands_.end(), 0.0);
   std::fill(tau_commands_.begin(), tau_commands_.end(), 0.0);
+  std::fill(kp_commands_.begin(), kp_commands_.end(), 0.0);
+  std::fill(kd_commands_.begin(), kd_commands_.end(), 0.0);
 
   RCLCPP_INFO(
       rclcpp::get_logger("OpenArm_v10RTHardware"),
@@ -243,6 +245,8 @@ OpenArm_v10RTHardware::export_command_interfaces() {
         joint_names_[i], hardware_interface::HW_IF_VELOCITY, &vel_commands_[i]);
     command_interfaces.emplace_back(
         joint_names_[i], hardware_interface::HW_IF_EFFORT, &tau_commands_[i]);
+    command_interfaces.emplace_back(joint_names_[i], "kp", &kp_commands_[i]);
+    command_interfaces.emplace_back(joint_names_[i], "kd", &kd_commands_[i]);
   }
 
   return command_interfaces;
@@ -284,15 +288,8 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
       mit_params_[i].q = pos_commands_[i];
       mit_params_[i].dq = vel_commands_[i];
       mit_params_[i].tau = tau_commands_[i];
-
-      // Use arm joint gains or gripper gains
-      if (i < static_cast<ssize_t>(controller_config_.arm_joints.size())) {
-        mit_params_[i].kp = controller_config_.arm_joints[i].kp;
-        mit_params_[i].kd = controller_config_.arm_joints[i].kd;
-      } else if (controller_config_.gripper_joint.has_value()) {
-        mit_params_[i].kp = controller_config_.gripper_joint->kp;
-        mit_params_[i].kd = controller_config_.gripper_joint->kd;
-      }
+      mit_params_[i].kp = kp_commands_[i];
+      mit_params_[i].kd = kd_commands_[i];
     }
 
     stats_.can_writes++;
@@ -543,6 +540,8 @@ bool OpenArm_v10RTHardware::switch_to_mit_mode() {
     pos_commands_[i] = pos_states_[i];
     vel_commands_[i] = 0.0;
     tau_commands_[i] = 0.0;
+    kp_commands_[i] = 1.0;
+    kd_commands_[i] = 1.0;
   }
 
   return true;
