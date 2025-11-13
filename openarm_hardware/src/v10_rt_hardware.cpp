@@ -188,19 +188,39 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_activate(
     return CallbackReturn::ERROR;
   }
 
+  // Switch motors to MIT control mode
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
+              "Setting all motors to MIT mode");
+  if (!openarm_rt_->set_mode_all_rt(openarm::realtime::ControlMode::MIT, 1000)) {
+    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                 "Failed to set MIT mode on motors");
+    return CallbackReturn::ERROR;
+  }
+
+  // Initialize states and commands from received motor states
   for (ssize_t i = 0; i < received; i++) {
     if (motor_states_[i].valid) {
       pos_states_[i] = motor_states_[i].position;
       vel_states_[i] = motor_states_[i].velocity;
       tau_states_[i] = motor_states_[i].torque;
+
+      // Initialize commands to current positions to avoid jumps
+      pos_commands_[i] = pos_states_[i];
+      vel_commands_[i] = 0.0;
+      tau_commands_[i] = 0.0;
+      kp_commands_[i] = 0.0;  // Will use defaults from config
+      kd_commands_[i] = 0.0;  // Will use defaults from config
+
       RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                  "Initialized joint %zu: pos=%.3f, vel=%.3f, tau=%.3f", i,
-                  pos_states_[i], vel_states_[i], tau_states_[i]);
+                  "Initialized joint %zu: pos=%.3f, vel=%.3f, tau=%.3f, "
+                  "default kp=%.2f, kd=%.2f",
+                  i, pos_states_[i], vel_states_[i], tau_states_[i],
+                  default_kp_[i], default_kd_[i]);
     }
   }
 
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
-              "Hardware interface activated successfully. Motors enabled.");
+              "Hardware interface activated successfully in MIT mode.");
 
   return CallbackReturn::SUCCESS;
 }
@@ -279,36 +299,20 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
   // Use controller period as timeout (convert to microseconds)
   int timeout_us = static_cast<int>(period.seconds() * 1e6);
 
-  ssize_t sent = 0;
+  // Pack MIT commands for all motors
+  for (ssize_t i = 0; i < num_joints_; i++) {
+    mit_params_[i].q = pos_commands_[i];
+    mit_params_[i].dq = vel_commands_[i];
+    mit_params_[i].tau = tau_commands_[i];
 
-  // Send commands based on current mode (to all motors every cycle)
-  if (current_mode_ == ControlMode::MIT) {
-    // Pack MIT commands for all motors
-    for (ssize_t i = 0; i < num_joints_; i++) {
-      mit_params_[i].q = pos_commands_[i];
-      mit_params_[i].dq = vel_commands_[i];
-      mit_params_[i].tau = tau_commands_[i];
-      mit_params_[i].kp = kp_commands_[i];
-      mit_params_[i].kd = kd_commands_[i];
-    }
-
-    stats_.can_writes++;
-    sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_,
-                                          timeout_us);
-
-  } else if (current_mode_ == ControlMode::POSITION_VELOCITY) {
-    for (ssize_t i = 0; i < num_joints_; i++) {
-      posvel_params_[i].q = pos_commands_[i];
-      posvel_params_[i].dq = vel_commands_[i];
-    }
-
-    stats_.can_writes++;
-    sent = openarm_rt_->send_posvel_batch_rt(posvel_params_.data(), num_joints_,
-                                             timeout_us);
-  } else {
-    stats_.can_writes++;
-    sent = openarm_rt_->refresh_all_motors_rt(timeout_us);
+    // Use commanded kp/kd if non-zero, otherwise use configured defaults
+    mit_params_[i].kp = (kp_commands_[i] > 0.0) ? kp_commands_[i] : default_kp_[i];
+    mit_params_[i].kd = (kd_commands_[i] > 0.0) ? kd_commands_[i] : default_kd_[i];
   }
+
+  stats_.can_writes++;
+  ssize_t sent = openarm_rt_->send_mit_batch_rt(mit_params_.data(), num_joints_,
+                                                timeout_us);
 
   if (sent >= 0 && sent < num_joints_) {
     stats_.tx_partial++;
@@ -317,7 +321,7 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
   // Check for send errors
   if (sent < 0) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                 "Position/velocity send failed with errno %d: %s", errno,
+                 "MIT control send failed with errno %d: %s", errno,
                  strerror(errno));
     return hardware_interface::return_type::ERROR;
   }
@@ -380,55 +384,6 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
   }
 
   return hardware_interface::return_type::OK;
-}
-
-hardware_interface::return_type
-OpenArm_v10RTHardware::prepare_command_mode_switch(
-    const std::vector<std::string>& start_interfaces,
-    const std::vector<std::string>& /*stop_interfaces*/) {
-  // Determine the new mode
-  ControlMode new_mode = determine_mode_from_interfaces(start_interfaces);
-
-  if (new_mode == ControlMode::UNINITIALIZED) {
-    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                 "Cannot determine control mode from interfaces");
-    return hardware_interface::return_type::ERROR;
-  }
-
-  return hardware_interface::return_type::OK;
-}
-
-hardware_interface::return_type
-OpenArm_v10RTHardware::perform_command_mode_switch(
-    const std::vector<std::string>& start_interfaces,
-    const std::vector<std::string>& /*stop_interfaces*/) {
-  ControlMode new_mode = determine_mode_from_interfaces(start_interfaces);
-
-  if (new_mode == current_mode_) {
-    return hardware_interface::return_type::OK;
-  }
-
-  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
-              "Switching control mode from %d to %d",
-              static_cast<int>(current_mode_), static_cast<int>(new_mode));
-
-  bool success = false;
-  if (new_mode == ControlMode::MIT) {
-    success = switch_to_mit_mode();
-  } else if (new_mode == ControlMode::POSITION_VELOCITY) {
-    success = switch_to_position_mode();
-  }
-
-  if (success) {
-    current_mode_ = new_mode;
-    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                "Control mode switch completed successfully");
-    return hardware_interface::return_type::OK;
-  } else {
-    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                 "Failed to switch control mode");
-    return hardware_interface::return_type::ERROR;
-  }
 }
 
 bool OpenArm_v10RTHardware::parse_config(
@@ -508,10 +463,13 @@ bool OpenArm_v10RTHardware::parse_config(
       return false;
     }
 
-    // Build joint names vector
+    // Build joint names vector and store default kp/kd values
     joint_names_.clear();
-    for (const auto& motor : controller_config_.arm_joints) {
+    for (size_t i = 0; i < controller_config_.arm_joints.size(); i++) {
+      const auto& motor = controller_config_.arm_joints[i];
       joint_names_.push_back(motor.name);
+      default_kp_[i] = motor.kp;
+      default_kd_[i] = motor.kd;
     }
     if (controller_config_.gripper_joint.has_value()) {
       joint_names_.push_back(controller_config_.gripper_joint->name);
@@ -526,92 +484,6 @@ bool OpenArm_v10RTHardware::parse_config(
     RCLCPP_ERROR(logger, "Failed to parse configuration: %s", e.what());
     return false;
   }
-}
-
-bool OpenArm_v10RTHardware::switch_to_mit_mode() {
-  // Enable motors if not already enabled
-  if (current_mode_ == ControlMode::UNINITIALIZED) {
-    size_t enabled = openarm_rt_->enable_all_motors_rt(1000);
-    if (enabled != openarm_rt_->get_motor_count()) {
-      RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                   "Failed to enable all motors for MIT mode");
-      return false;
-    }
-  }
-
-  // Switch motors to MIT control mode
-  if (!openarm_rt_->set_mode_all_rt(openarm::realtime::ControlMode::MIT,
-                                    1000)) {
-    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                 "Failed to set MIT mode on motors");
-    return false;
-  }
-
-  // Initialize commands to current positions to avoid jumps
-  for (ssize_t i = 0; i < num_joints_; i++) {
-    pos_commands_[i] = pos_states_[i];
-    vel_commands_[i] = 0.0;
-    tau_commands_[i] = 0.0;
-    kp_commands_[i] = 1.0;
-    kd_commands_[i] = 1.0;
-  }
-
-  return true;
-}
-
-bool OpenArm_v10RTHardware::switch_to_position_mode() {
-  // Enable motors if not already enabled
-  if (current_mode_ == ControlMode::UNINITIALIZED) {
-    size_t enabled = openarm_rt_->enable_all_motors_rt(1000);
-    if (enabled != openarm_rt_->get_motor_count()) {
-      RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                   "Failed to enable all motors for position mode");
-      return false;
-    }
-  }
-
-  // Switch motors to position/velocity control mode
-  if (!openarm_rt_->set_mode_all_rt(
-          openarm::realtime::ControlMode::POSITION_VELOCITY, 1000)) {
-    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                 "Failed to set position/velocity mode on motors");
-    return false;
-  }
-
-  // Initialize commands to current positions
-  for (ssize_t i = 0; i < num_joints_; i++) {
-    pos_commands_[i] = pos_states_[i];
-    vel_commands_[i] = 0.0;
-  }
-
-  return true;
-}
-
-ControlMode OpenArm_v10RTHardware::determine_mode_from_interfaces(
-    const std::vector<std::string>& interfaces) {
-  bool has_position = false;
-  bool has_effort = false;
-
-  for (const auto& interface : interfaces) {
-    if (interface.find(hardware_interface::HW_IF_POSITION) !=
-        std::string::npos) {
-      has_position = true;
-    }
-    if (interface.find(hardware_interface::HW_IF_EFFORT) != std::string::npos) {
-      has_effort = true;
-    }
-  }
-
-  // MIT mode: effort interface claimed
-  if (has_effort) {
-    return ControlMode::MIT;
-  }
-  // Position-velocity mode: position interface claimed
-  else if (has_position) {
-    return ControlMode::POSITION_VELOCITY;
-  }
-
-  return ControlMode::UNINITIALIZED;
 }
 
 void OpenArm_v10RTHardware::log_stats() {

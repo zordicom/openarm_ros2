@@ -76,14 +76,6 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
   hardware_interface::return_type write(
       const rclcpp::Time& time, const rclcpp::Duration& period) override;
 
-  // Command mode switching
-  hardware_interface::return_type prepare_command_mode_switch(
-      const std::vector<std::string>& start_interfaces,
-      const std::vector<std::string>& stop_interfaces) override;
-
-  hardware_interface::return_type perform_command_mode_switch(
-      const std::vector<std::string>& start_interfaces,
-      const std::vector<std::string>& stop_interfaces) override;
 
  private:
   // Configuration
@@ -102,15 +94,15 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
   std::array<double, MAX_JOINTS> kp_commands_{};
   std::array<double, MAX_JOINTS> kd_commands_{};
 
+  // Default kp/kd values from configuration (used when command interface not claimed)
+  std::array<double, MAX_JOINTS> default_kp_{};
+  std::array<double, MAX_JOINTS> default_kd_{};
+
   // Pre-allocated CAN command buffers
   std::array<openarm::damiao_motor::MITParam, MAX_JOINTS> mit_params_{};
-  std::array<openarm::damiao_motor::PosVelParam, MAX_JOINTS> posvel_params_{};
 
   // Pre-allocated CAN read buffer
   std::array<openarm::damiao_motor::StateResult, MAX_JOINTS> motor_states_{};
-
-  // Control mode management
-  ControlMode current_mode_{ControlMode::UNINITIALIZED};
 
   // RT-safe OpenArm interface
   std::unique_ptr<openarm::realtime::OpenArm> openarm_rt_;
@@ -147,10 +139,6 @@ class OpenArm_v10RTHardware : public hardware_interface::SystemInterface {
 
   // Helper methods
   bool parse_config(const hardware_interface::HardwareInfo& info);
-  bool switch_to_mit_mode();
-  bool switch_to_position_mode();
-  ControlMode determine_mode_from_interfaces(
-      const std::vector<std::string>& interfaces);
   void log_stats();
 };
 
