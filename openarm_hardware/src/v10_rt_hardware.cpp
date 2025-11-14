@@ -420,15 +420,6 @@ bool OpenArm_v10RTHardware::parse_config(
       MotorConfig motor_config;
       motor_config.name = joint.name;
 
-      // Parse motor type
-      auto type_it = joint.parameters.find("motor_type");
-      if (type_it == joint.parameters.end()) {
-        RCLCPP_ERROR(logger, "Missing motor_type for joint %s",
-                     joint.name.c_str());
-        return false;
-      }
-      motor_config.type = parse_motor_type_param(type_it->second);
-
       // Parse CAN IDs
       auto send_id_it = joint.parameters.find("send_can_id");
       auto recv_id_it = joint.parameters.find("recv_can_id");
