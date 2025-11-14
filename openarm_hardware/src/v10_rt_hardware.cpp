@@ -104,7 +104,7 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_configure(
   // Add motors to RT-safe wrapper based on configuration
   for (size_t i = 0; i < controller_config_.arm_joints.size(); i++) {
     const auto& motor = controller_config_.arm_joints[i];
-    int motor_id = openarm_rt_->add_motor(motor.type, motor.send_can_id,
+    int motor_id = openarm_rt_->add_motor(motor.send_can_id,
                                           motor.recv_can_id);
     if (motor_id < 0) {
       RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
@@ -124,8 +124,7 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_configure(
   if (controller_config_.gripper_joint.has_value()) {
     size_t gripper_joint_idx = controller_config_.arm_joints.size();
     int gripper_motor_id =
-        openarm_rt_->add_motor(controller_config_.gripper_joint->motor_type,
-                               controller_config_.gripper_joint->send_can_id,
+        openarm_rt_->add_motor(controller_config_.gripper_joint->send_can_id,
                                controller_config_.gripper_joint->recv_can_id);
     if (gripper_motor_id < 0) {
       RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
