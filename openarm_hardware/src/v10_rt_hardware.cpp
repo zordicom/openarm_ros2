@@ -337,15 +337,23 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
     // States are returned in motor order (matching the order they were added)
     for (ssize_t i = 0; i < received; i++) {
       if (motor_states_[i].valid) {
-        // Check for unrecoverable errors (error codes 0x8-0xE)
-        // 0x1 = no error, 0x8-0xE = unrecoverable errors
+        // Check for errors (any non-zero error code indicates an error)
         uint8_t error_code = motor_states_[i].error_code;
-        if (error_code != 0x1 && error_code >= 0x8 && error_code <= 0xE) {
+        if (error_code != 0) {
           std::string error_msg = error_code_to_string(error_code);
           RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
-                       "Motor %zd has unrecoverable error: %s (0x%X). "
+                       "Motor %zd has error: %s (0x%X). "
                        "Stopping controller.",
                        i, error_msg.c_str(), error_code);
+          return hardware_interface::return_type::ERROR;
+        }
+
+        // Check if motor is not enabled
+        if (!motor_states_[i].enabled) {
+          RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
+                       "Motor %zd is not enabled. "
+                       "Stopping controller.",
+                       i);
           return hardware_interface::return_type::ERROR;
         }
 
