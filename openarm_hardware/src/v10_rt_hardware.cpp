@@ -203,18 +203,19 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_activate(
       vel_states_[i] = motor_states_[i].velocity;
       tau_states_[i] = motor_states_[i].torque;
 
-      // Initialize commands to current positions to avoid jumps
-      pos_commands_[i] = pos_states_[i];
-      vel_commands_[i] = 0.0;
-      tau_commands_[i] = 0.0;
-      kp_commands_[i] = 0.0;  // Will use defaults from config
-      kd_commands_[i] = 0.0;  // Will use defaults from config
+      // Initialize ALL commands to current state values to maintain arm position
+      // and prevent drop during controller startup
+      pos_commands_[i] = motor_states_[i].position;
+      vel_commands_[i] = motor_states_[i].velocity;
+      tau_commands_[i] = motor_states_[i].torque;
+      kp_commands_[i] = default_kp_[i];  // Use config defaults
+      kd_commands_[i] = default_kd_[i];  // Use config defaults
 
       RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
                   "Initialized joint %zu: pos=%.3f, vel=%.3f, tau=%.3f, "
-                  "default kp=%.2f, kd=%.2f",
-                  i, pos_states_[i], vel_states_[i], tau_states_[i],
-                  default_kp_[i], default_kd_[i]);
+                  "kp=%.2f, kd=%.2f",
+                  i, pos_states_[i], vel_states_[i], tau_commands_[i],
+                  kp_commands_[i], kd_commands_[i]);
     }
   }
 
