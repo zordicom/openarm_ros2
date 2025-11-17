@@ -104,8 +104,7 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_configure(
   // Add motors to RT-safe wrapper based on configuration
   for (size_t i = 0; i < controller_config_.arm_joints.size(); i++) {
     const auto& motor = controller_config_.arm_joints[i];
-    int motor_id = openarm_rt_->add_motor(motor.send_can_id,
-                                          motor.recv_can_id);
+    int motor_id = openarm_rt_->add_motor(motor.send_can_id, motor.recv_can_id);
     if (motor_id < 0) {
       RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
                    "Failed to add motor %s to RT-safe wrapper",
@@ -190,7 +189,8 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_activate(
   // Switch motors to MIT control mode
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHardware"),
               "Setting all motors to MIT mode");
-  if (!openarm_rt_->set_mode_all_rt(openarm::realtime::ControlMode::MIT, 1000)) {
+  if (!openarm_rt_->set_mode_all_rt(openarm::realtime::ControlMode::MIT,
+                                    1000)) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHardware"),
                  "Failed to set MIT mode on motors");
     return CallbackReturn::ERROR;
@@ -290,13 +290,14 @@ hardware_interface::return_type OpenArm_v10RTHardware::read(
 }
 
 hardware_interface::return_type OpenArm_v10RTHardware::write(
-    const rclcpp::Time& /*time*/, const rclcpp::Duration& period) {
+    const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/) {
   stats_.write_count++;
 
   auto now = std::chrono::steady_clock::now();
 
-  // Use controller period as timeout (convert to microseconds)
-  int timeout_us = static_cast<int>(period.seconds() * 1e6);
+  // Use configured timeout based on expected control rate, not actual measured
+  // period
+  int timeout_us = config_.can_timeout_us;
 
   // Pack MIT commands for all motors
   for (ssize_t i = 0; i < num_joints_; i++) {
@@ -305,8 +306,10 @@ hardware_interface::return_type OpenArm_v10RTHardware::write(
     mit_params_[i].tau = tau_commands_[i];
 
     // Use commanded kp/kd if non-zero, otherwise use configured defaults
-    mit_params_[i].kp = (kp_commands_[i] > 0.0) ? kp_commands_[i] : default_kp_[i];
-    mit_params_[i].kd = (kd_commands_[i] > 0.0) ? kd_commands_[i] : default_kd_[i];
+    mit_params_[i].kp =
+        (kp_commands_[i] > 0.0) ? kp_commands_[i] : default_kp_[i];
+    mit_params_[i].kd =
+        (kd_commands_[i] > 0.0) ? kd_commands_[i] : default_kd_[i];
   }
 
   stats_.can_writes++;
