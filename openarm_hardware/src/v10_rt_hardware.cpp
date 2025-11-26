@@ -14,6 +14,9 @@
 
 #include "openarm_hardware/v10_rt_hardware.hpp"
 
+#include <pthread.h>
+#include <sched.h>
+
 #include <algorithm>
 #include <chrono>
 #include <sstream>
@@ -144,10 +147,38 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_configure(
 
 OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_activate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
+  auto logger = rclcpp::get_logger("OpenArm_v10RTHardware");
+
   // Check if RT kernel is available
   if (!realtime_tools::has_realtime_kernel()) {
-    RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHardware"),
+    RCLCPP_WARN(logger,
                 "RT kernel not detected, running without RT guarantees");
+  }
+
+  // Set CPU affinity if configured
+  if (!config_.cpu_affinity.empty()) {
+    cpu_set_t cpuset;
+    auto pself = pthread_self();
+
+    CPU_ZERO(&cpuset);
+
+    for (int cpu : config_.cpu_affinity) {
+      CPU_SET(cpu, &cpuset);
+    }
+
+    if (pthread_setaffinity_np(pself, sizeof(cpu_set_t), &cpuset) != 0) {
+      RCLCPP_ERROR(logger, "Failed to set CPU affinity: %s", strerror(errno));
+      return CallbackReturn::ERROR;
+    }
+
+    // Format CPU list for logging
+    std::ostringstream cpu_list_str;
+    for (size_t i = 0; i < config_.cpu_affinity.size(); i++) {
+      if (i > 0) cpu_list_str << ",";
+      cpu_list_str << config_.cpu_affinity[i];
+    }
+    RCLCPP_INFO(logger, "Successfully pinned control loop to CPUs: %s",
+                cpu_list_str.str().c_str());
   }
 
   // Enable motors
@@ -203,8 +234,8 @@ OpenArm_v10RTHardware::CallbackReturn OpenArm_v10RTHardware::on_activate(
       vel_states_[i] = motor_states_[i].velocity;
       tau_states_[i] = motor_states_[i].torque;
 
-      // Initialize ALL commands to current state values to maintain arm position
-      // and prevent drop during controller startup
+      // Initialize ALL commands to current state values to maintain arm
+      // position and prevent drop during controller startup
       pos_commands_[i] = motor_states_[i].position;
       vel_commands_[i] = motor_states_[i].velocity;
       tau_commands_[i] = motor_states_[i].torque;
@@ -421,10 +452,36 @@ bool OpenArm_v10RTHardware::parse_config(
     controller_config_.can_fd = false;  // Default to standard CAN
   }
 
+  // Parse CPU affinity (comma-separated list of CPU IDs)
+  it = info.hardware_parameters.find("cpu_affinity");
+  if (it != info.hardware_parameters.end()) {
+    std::string cpu_list = it->second;
+    std::istringstream ss(cpu_list);
+    std::string cpu_str;
+    while (std::getline(ss, cpu_str, ',')) {
+      // Trim whitespace
+      cpu_str.erase(0, cpu_str.find_first_not_of(" \t"));
+      cpu_str.erase(cpu_str.find_last_not_of(" \t") + 1);
+      if (!cpu_str.empty()) {
+        int cpu = std::stoi(cpu_str);
+        config_.cpu_affinity.push_back(cpu);
+      }
+    }
+  }
+
   RCLCPP_INFO(logger, "CAN Interface: %s", config_.can_interface.c_str());
   RCLCPP_INFO(logger, "CAN Timeout: %d us", config_.can_timeout_us);
   RCLCPP_INFO(logger, "CAN FD: %s",
               controller_config_.can_fd ? "enabled" : "disabled");
+
+  if (!config_.cpu_affinity.empty()) {
+    std::ostringstream cpu_list_str;
+    for (size_t i = 0; i < config_.cpu_affinity.size(); i++) {
+      if (i > 0) cpu_list_str << ",";
+      cpu_list_str << config_.cpu_affinity[i];
+    }
+    RCLCPP_INFO(logger, "CPU Affinity: %s", cpu_list_str.str().c_str());
+  }
 
   // Parse joint configuration from URDF
   try {

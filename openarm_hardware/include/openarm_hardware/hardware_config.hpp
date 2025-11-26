@@ -87,9 +87,10 @@ struct HardwareConfig {
   int can_timeout_us = 500;  // microseconds
 
   // RT thread configuration
-  int rt_priority = 0;             // 0 = don't set, 1-99 = RT priority
-  int worker_thread_priority = 0;  // Priority for worker thread
-  std::vector<int> cpu_affinity;   // CPU cores for worker thread
+  int rt_priority = 0;  // 0 = don't set, 1-99 = RT priority
+  int worker_thread_priority =
+      0;  // Priority for worker thread (unused in RT implementation)
+  std::vector<int> cpu_affinity;  // CPU cores to pin control loop thread to
 
   // Timing constraints
   int max_cycle_time_us = 1000;  // Maximum cycle time in microseconds
