@@ -145,9 +145,6 @@ bool OpenArm_v10RTHW::parse_config(
       return false;
     }
 
-    num_joints_ =
-        config_.arm_joints.size() + (config_.gripper_joint.has_value() ? 1 : 0);
-
     RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW"),
                 "Configured %zu total joints (%zu arm + %zu gripper)",
                 num_joints_, config_.arm_joints.size(),
@@ -172,7 +169,6 @@ hardware_interface::CallbackReturn OpenArm_v10RTHW::on_init(
     return CallbackReturn::ERROR;
   }
 
-  // Build joint names vector
   num_joints_ =
       config_.arm_joints.size() + (config_.gripper_joint.has_value() ? 1 : 0);
 
@@ -569,9 +565,13 @@ void OpenArm_v10RTHW::can_thread_loop() {
     // Send MIT commands (RT-safe, non-blocking)
     ssize_t sent = openarm_rt_->send_mit_batch_rt(mit_params, num_joints_, 500);
     if (sent < 0) {
-      RCLCPP_ERROR_THROTTLE(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
-                            *rclcpp::Clock::make_shared(), 1000,
-                            "Failed to send MIT commands");
+      static auto last_error_time = std::chrono::steady_clock::now();
+      auto now = std::chrono::steady_clock::now();
+      if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_error_time).count() > 1000) {
+        RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
+                     "Failed to send MIT commands");
+        last_error_time = now;
+      }
     }
 
     // Receive motor states (RT-safe, non-blocking)
@@ -613,10 +613,14 @@ void OpenArm_v10RTHW::can_thread_loop() {
     long cycle_duration_us = cycle_duration_ns / 1000;
 
     if (cycle_duration_us > thread_cycle_time_.count()) {
-      RCLCPP_WARN_THROTTLE(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
-                           *rclcpp::Clock::make_shared(), 5000,
-                           "CAN thread cycle overrun: %ld us (target: %ld us)",
-                           cycle_duration_us, thread_cycle_time_.count());
+      static auto last_warn_time = std::chrono::steady_clock::now();
+      auto now = std::chrono::steady_clock::now();
+      if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_warn_time).count() > 5000) {
+        RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
+                    "CAN thread cycle overrun: %ld us (target: %ld us)",
+                    cycle_duration_us, thread_cycle_time_.count());
+        last_warn_time = now;
+      }
     }
   }
 
