@@ -697,6 +697,15 @@ void OpenArm_v10RTHW::can_thread_loop() {
       }
     }
 
+    // Measure actual work time (before sleep)
+    struct timespec work_end;
+    clock_gettime(CLOCK_MONOTONIC, &work_end);
+
+    long work_duration_ns =
+        (work_end.tv_sec - cycle_start.tv_sec) * 1000000000L +
+        (work_end.tv_nsec - cycle_start.tv_nsec);
+    long work_duration_us = work_duration_ns / 1000;
+
     // Calculate next wakeup time (RT-safe periodic timing)
     next_wakeup.tv_nsec += cycle_ns;
     while (next_wakeup.tv_nsec >= 1000000000) {
@@ -707,27 +716,22 @@ void OpenArm_v10RTHW::can_thread_loop() {
     // RT-safe absolute time sleep
     clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup, NULL);
 
-    // Check for cycle overrun
-    struct timespec cycle_end;
-    clock_gettime(CLOCK_MONOTONIC, &cycle_end);
-
-    long cycle_duration_ns =
-        (cycle_end.tv_sec - cycle_start.tv_sec) * 1000000000L +
-        (cycle_end.tv_nsec - cycle_start.tv_nsec);
-    long cycle_duration_us = cycle_duration_ns / 1000;
-
     // Track timing statistics
     static long total_send_us = 0;
     static long total_recv_us = 0;
+    static long total_work_us = 0;
     static long max_send_us = 0;
     static long max_recv_us = 0;
+    static long max_work_us = 0;
     static size_t cycle_count = 0;
     static auto last_stats_time = std::chrono::steady_clock::now();
 
     total_send_us += send_duration_us;
     total_recv_us += recv_duration_us;
+    total_work_us += work_duration_us;
     max_send_us = std::max(max_send_us, send_duration_us);
     max_recv_us = std::max(max_recv_us, recv_duration_us);
+    max_work_us = std::max(max_work_us, work_duration_us);
     cycle_count++;
 
     // Log timing stats every 5 seconds
@@ -737,30 +741,34 @@ void OpenArm_v10RTHW::can_thread_loop() {
             .count() > 5000) {
       long avg_send_us = total_send_us / cycle_count;
       long avg_recv_us = total_recv_us / cycle_count;
+      long avg_work_us = total_work_us / cycle_count;
       RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
                   "CAN timing stats: send avg=%ld us (max=%ld us), recv "
-                  "avg=%ld us (max=%ld us), cycles=%zu",
+                  "avg=%ld us (max=%ld us), work avg=%ld us (max=%ld us), cycles=%zu",
                   avg_send_us, max_send_us, avg_recv_us, max_recv_us,
-                  cycle_count);
+                  avg_work_us, max_work_us, cycle_count);
       // Reset stats
       total_send_us = 0;
       total_recv_us = 0;
+      total_work_us = 0;
       max_send_us = 0;
       max_recv_us = 0;
+      max_work_us = 0;
       cycle_count = 0;
       last_stats_time = now_steady;
     }
 
-    if (cycle_duration_us > thread_cycle_time_.count()) {
+    // Warn if actual work time exceeds cycle budget (before sleep)
+    if (work_duration_us > thread_cycle_time_.count()) {
       static auto last_warn_time = std::chrono::steady_clock::now();
       auto now = std::chrono::steady_clock::now();
       if (std::chrono::duration_cast<std::chrono::milliseconds>(now -
                                                                 last_warn_time)
               .count() > 5000) {
         RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
-                    "CAN thread cycle overrun: %ld us (target: %ld us), send: "
+                    "CAN thread work overrun: %ld us (target: %ld us), send: "
                     "%ld us, recv: %ld us",
-                    cycle_duration_us, thread_cycle_time_.count(),
+                    work_duration_us, thread_cycle_time_.count(),
                     send_duration_us, recv_duration_us);
         last_warn_time = now;
       }
