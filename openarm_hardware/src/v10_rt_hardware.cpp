@@ -316,7 +316,8 @@ hardware_interface::CallbackReturn OpenArm_v10RTHW::on_activate(
       CPU_SET(cpu, &cpuset);
     }
 
-    if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0) {
+    if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) !=
+        0) {
       RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHW"),
                   "Failed to set controller thread CPU affinity: %s",
                   strerror(errno));
@@ -328,7 +329,8 @@ hardware_interface::CallbackReturn OpenArm_v10RTHW::on_activate(
         cpu_list_str << hw_config_.controller_cpu_affinity[i];
       }
       RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW"),
-                  "Controller thread pinned to CPUs: %s", cpu_list_str.str().c_str());
+                  "Controller thread pinned to CPUs: %s",
+                  cpu_list_str.str().c_str());
     }
   }
 
@@ -634,12 +636,13 @@ void OpenArm_v10RTHW::can_thread_loop() {
     clock_gettime(CLOCK_MONOTONIC, &send_start);
 
     ssize_t sent = openarm_rt_->send_mit_batch_rt(mit_params, num_joints_,
-                                                    hw_config_.can_timeout_us);
+                                                  hw_config_.can_timeout_us);
 
     clock_gettime(CLOCK_MONOTONIC, &send_end);
     long send_duration_us =
         ((send_end.tv_sec - send_start.tv_sec) * 1000000000L +
-         (send_end.tv_nsec - send_start.tv_nsec)) / 1000;
+         (send_end.tv_nsec - send_start.tv_nsec)) /
+        1000;
 
     if (sent < 0) {
       static auto last_error_time = std::chrono::steady_clock::now();
@@ -658,12 +661,26 @@ void OpenArm_v10RTHW::can_thread_loop() {
     clock_gettime(CLOCK_MONOTONIC, &recv_start);
 
     ssize_t received = openarm_rt_->receive_states_batch_rt(
-        states, MAX_JOINTS, hw_config_.can_timeout_us);
+        states, num_joints_, hw_config_.can_timeout_us);
+
+    if (received < static_cast<ssize_t>(num_joints_)) {
+      static auto last_partial_warn_time = std::chrono::steady_clock::now();
+      auto now = std::chrono::steady_clock::now();
+      if (std::chrono::duration_cast<std::chrono::milliseconds>(
+              now - last_partial_warn_time)
+              .count() > 1000) {
+        RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
+                    "Partial receive: got %zd/%zu motor states", received,
+                    num_joints_);
+        last_partial_warn_time = now;
+      }
+    }
 
     clock_gettime(CLOCK_MONOTONIC, &recv_end);
     long recv_duration_us =
         ((recv_end.tv_sec - recv_start.tv_sec) * 1000000000L +
-         (recv_end.tv_nsec - recv_start.tv_nsec)) / 1000;
+         (recv_end.tv_nsec - recv_start.tv_nsec)) /
+        1000;
 
     // Write states to buffer
     int write_idx = state_write_idx_.load(std::memory_order_acquire);
@@ -715,12 +732,16 @@ void OpenArm_v10RTHW::can_thread_loop() {
 
     // Log timing stats every 5 seconds
     auto now_steady = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::milliseconds>(now_steady - last_stats_time).count() > 5000) {
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now_steady -
+                                                              last_stats_time)
+            .count() > 5000) {
       long avg_send_us = total_send_us / cycle_count;
       long avg_recv_us = total_recv_us / cycle_count;
       RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
-                  "CAN timing stats: send avg=%ld us (max=%ld us), recv avg=%ld us (max=%ld us), cycles=%zu",
-                  avg_send_us, max_send_us, avg_recv_us, max_recv_us, cycle_count);
+                  "CAN timing stats: send avg=%ld us (max=%ld us), recv "
+                  "avg=%ld us (max=%ld us), cycles=%zu",
+                  avg_send_us, max_send_us, avg_recv_us, max_recv_us,
+                  cycle_count);
       // Reset stats
       total_send_us = 0;
       total_recv_us = 0;
@@ -737,8 +758,10 @@ void OpenArm_v10RTHW::can_thread_loop() {
                                                                 last_warn_time)
               .count() > 5000) {
         RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
-                    "CAN thread cycle overrun: %ld us (target: %ld us), send: %ld us, recv: %ld us",
-                    cycle_duration_us, thread_cycle_time_.count(), send_duration_us, recv_duration_us);
+                    "CAN thread cycle overrun: %ld us (target: %ld us), send: "
+                    "%ld us, recv: %ld us",
+                    cycle_duration_us, thread_cycle_time_.count(),
+                    send_duration_us, recv_duration_us);
         last_warn_time = now;
       }
     }
