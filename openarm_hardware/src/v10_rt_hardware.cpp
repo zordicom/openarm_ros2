@@ -306,6 +306,9 @@ hardware_interface::CallbackReturn OpenArm_v10RTHW::on_activate(
     return CallbackReturn::ERROR;
   }
 
+  // Wait for motors to respond to enable command
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
   openarm::damiao_motor::StateResult states[MAX_JOINTS];
   ssize_t received =
       openarm_rt_->receive_states_batch_rt(states, num_joints_, 1000);
