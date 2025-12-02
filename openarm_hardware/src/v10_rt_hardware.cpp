@@ -145,11 +145,6 @@ bool OpenArm_v10RTHW::parse_config(
       return false;
     }
 
-    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW"),
-                "Configured %zu total joints (%zu arm + %zu gripper)",
-                num_joints_, config_.arm_joints.size(),
-                config_.gripper_joint.has_value() ? size_t(1) : size_t(0));
-
     return true;
   } catch (const std::exception& e) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHW"),
@@ -171,6 +166,11 @@ hardware_interface::CallbackReturn OpenArm_v10RTHW::on_init(
 
   num_joints_ =
       config_.arm_joints.size() + (config_.gripper_joint.has_value() ? 1 : 0);
+
+  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW"),
+              "Configured %zu total joints (%zu arm + %zu gripper)",
+              num_joints_, config_.arm_joints.size(),
+              config_.gripper_joint.has_value() ? size_t(1) : size_t(0));
 
   if (num_joints_ >= MAX_JOINTS) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHW"),
@@ -306,77 +306,59 @@ hardware_interface::CallbackReturn OpenArm_v10RTHW::on_activate(
     return CallbackReturn::ERROR;
   }
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-  // Initialize all command arrays to zero first
-  for (size_t i = 0; i < MAX_JOINTS; ++i) {
-    pos_commands_[i] = 0.0;
-    vel_commands_[i] = 0.0;
-    tau_commands_[i] = 0.0;
-    kp_commands_[i] = 0.0;
-    kd_commands_[i] = 0.0;
-  }
-
-  // Read initial positions
-  openarm_rt_->refresh_all_motors_rt(1000);
-  std::this_thread::sleep_for(std::chrono::milliseconds(10));
-
   openarm::damiao_motor::StateResult states[MAX_JOINTS];
   ssize_t received =
-      openarm_rt_->receive_states_batch_rt(states, MAX_JOINTS, 1000);
+      openarm_rt_->receive_states_batch_rt(states, num_joints_, 1000);
 
-  if (received != static_cast<ssize_t>(num_joints_)) {
-    RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHW"),
-                 "Failed to read initial positions (received %zd/%zu)", received,
-                 num_joints_);
+  if (received < static_cast<ssize_t>(num_joints_)) {
+    RCLCPP_ERROR(
+        rclcpp::get_logger("OpenArm_v10RTHW"),
+        "Failed to receive enable feedback from all motors (got %zd/%zu)",
+        received, num_joints_);
     return CallbackReturn::ERROR;
   }
 
-  // Initialize states and commands from received motor states
-  // Store everything in motor frame (matching feature/rt-hardware-interface)
-  for (size_t i = 0; i < num_joints_ && i < static_cast<size_t>(received);
-       ++i) {
-    if (states[i].valid) {
-      pos_states_[i] = states[i].position;
-      vel_states_[i] = states[i].velocity;
-      tau_states_[i] = states[i].torque;
-
-      // Initialize ALL commands to current state to maintain position
-      pos_commands_[i] = states[i].position;
-      vel_commands_[i] = states[i].velocity;
-      tau_commands_[i] = states[i].torque;
-
-      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW"),
-                  "Joint %zu initialized: pos=%.3f, vel=%.3f, tau=%.3f rad", i,
-                  pos_commands_[i], vel_commands_[i], tau_commands_[i]);
-    } else {
+  // Initialize states and commands from enable feedback
+  // Store everything in motor frame (no conversions)
+  for (size_t i = 0; i < num_joints_; ++i) {
+    if (!states[i].valid) {
       RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHW"),
-                   "Joint %zu has invalid initial state", i);
+                   "Joint %zu has invalid state after enable", i);
       return CallbackReturn::ERROR;
     }
+
+    pos_states_[i] = states[i].position;
+    vel_states_[i] = states[i].velocity;
+    tau_states_[i] = states[i].torque;
+
+    // Initialize commands to current state to hold position
+    pos_commands_[i] = states[i].position;
+    vel_commands_[i] = states[i].velocity;
+    tau_commands_[i] = states[i].torque;
+
+    RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW"),
+                "Joint %zu initialized: pos=%.3f, vel=%.3f, tau=%.3f rad", i,
+                pos_commands_[i], vel_commands_[i], tau_commands_[i]);
   }
 
   // Initialize BOTH command buffers with current MOTOR positions
   // The background thread will read from cmd_read_idx_, so both buffers must be
   // initialized. Command buffers store motor positions (not joint space).
   for (size_t buf = 0; buf < 2; buf++) {
-    for (size_t i = 0; i < config_.arm_joints.size(); ++i) {
-      // Arm joints: pos_commands_[i] is already in motor space
-      cmd_buffers_[buf][i].position = states[i].position;
-      cmd_buffers_[buf][i].velocity = 0.0;
-      cmd_buffers_[buf][i].torque = 0.0;
-      cmd_buffers_[buf][i].kp = config_.arm_joints[i].kp;
-      cmd_buffers_[buf][i].kd = config_.arm_joints[i].kd;
-    }
+    for (size_t i = 0; i < num_joints_; ++i) {
+      // Use pos_commands_ which we've already populated correctly
+      cmd_buffers_[buf][i].position = pos_commands_[i];
+      cmd_buffers_[buf][i].velocity = vel_commands_[i];
+      cmd_buffers_[buf][i].torque = tau_commands_[i];
 
-    if (config_.gripper_joint.has_value()) {
-      size_t idx = config_.arm_joints.size();
-      // Gripper: use motor position from states, NOT joint space pos_commands_
-      cmd_buffers_[buf][idx].position = states[idx].position;
-      cmd_buffers_[buf][idx].velocity = 0.0;
-      cmd_buffers_[buf][idx].torque = 0.0;
-      cmd_buffers_[buf][idx].kp = config_.gripper_joint->kp;
-      cmd_buffers_[buf][idx].kd = config_.gripper_joint->kd;
+      // Set kp/kd defaults
+      if (config_.gripper_joint.has_value() && i == config_.arm_joints.size()) {
+        cmd_buffers_[buf][i].kp = config_.gripper_joint->kp;
+        cmd_buffers_[buf][i].kd = config_.gripper_joint->kd;
+      } else {
+        cmd_buffers_[buf][i].kp = config_.arm_joints[i].kp;
+        cmd_buffers_[buf][i].kd = config_.arm_joints[i].kd;
+      }
     }
   }
 
