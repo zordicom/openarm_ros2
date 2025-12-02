@@ -66,12 +66,6 @@ bool OpenArm_v10RTHW::parse_config(
       thread_cycle_time_ = std::chrono::microseconds(std::stoi(it->second));
     }
 
-    // Parse thread priority
-    it = info.hardware_parameters.find("can_thread_priority");
-    if (it != info.hardware_parameters.end()) {
-      thread_priority_ = std::stoi(it->second);
-    }
-
     // Parse HardwareConfig RT settings
     hw_config_.can_interface = config_.can_iface;
 
@@ -80,9 +74,11 @@ bool OpenArm_v10RTHW::parse_config(
       hw_config_.can_timeout_us = std::stoi(it->second);
     }
 
+    // Parse thread priority
     it = info.hardware_parameters.find("rt_priority");
     if (it != info.hardware_parameters.end()) {
       hw_config_.rt_priority = std::stoi(it->second);
+      thread_priority_ = hw_config_.rt_priority;
     }
 
     // Parse CPU affinity (comma-separated list)
