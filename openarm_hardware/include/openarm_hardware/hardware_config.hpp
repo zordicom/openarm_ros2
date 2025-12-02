@@ -70,9 +70,6 @@ struct ControllerConfig {
   // Use CAN FD instead of standard CAN.
   bool can_fd;
 
-  // Enable CSV logging of motor commands and states
-  bool enable_csv_logging = false;
-
   // Configuration storage using POD types
   std::vector<MotorConfig> arm_joints;
   std::optional<GripperConfig> gripper_joint;
