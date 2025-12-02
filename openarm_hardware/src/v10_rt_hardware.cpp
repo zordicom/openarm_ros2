@@ -109,15 +109,6 @@ bool OpenArm_v10RTHW::parse_config(
         GripperConfig gripper;
         gripper.name = joint.name;
 
-        auto motor_type_it = params.find("motor_type");
-        if (motor_type_it == params.end()) {
-          RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHW"),
-                       "Gripper joint '%s' missing 'motor_type' parameter",
-                       joint.name.c_str());
-          return false;
-        }
-        gripper.motor_type = parse_motor_type_param(motor_type_it->second);
-
         gripper.send_can_id = std::stoul(params.at("send_can_id"), nullptr, 0);
         gripper.recv_can_id = std::stoul(params.at("recv_can_id"), nullptr, 0);
         gripper.kp = std::stod(params.at("kp"));
@@ -135,15 +126,6 @@ bool OpenArm_v10RTHW::parse_config(
       } else {
         MotorConfig motor;
         motor.name = joint.name;
-
-        auto motor_type_it = params.find("motor_type");
-        if (motor_type_it == params.end()) {
-          RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHW"),
-                       "Arm joint '%s' missing 'motor_type' parameter",
-                       joint.name.c_str());
-          return false;
-        }
-        motor.type = parse_motor_type_param(motor_type_it->second);
 
         motor.send_can_id = std::stoul(params.at("send_can_id"), nullptr, 0);
         motor.recv_can_id = std::stoul(params.at("recv_can_id"), nullptr, 0);
