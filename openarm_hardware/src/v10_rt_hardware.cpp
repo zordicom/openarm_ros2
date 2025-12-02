@@ -81,13 +81,23 @@ bool OpenArm_v10RTHW::parse_config(
       thread_priority_ = hw_config_.rt_priority;
     }
 
-    // Parse CPU affinity (comma-separated list)
+    // Parse CPU affinity for CAN thread (comma-separated list)
     it = info.hardware_parameters.find("cpu_affinity");
     if (it != info.hardware_parameters.end() && !it->second.empty()) {
       std::stringstream ss(it->second);
       std::string cpu_str;
       while (std::getline(ss, cpu_str, ',')) {
         hw_config_.cpu_affinity.push_back(std::stoi(cpu_str));
+      }
+    }
+
+    // Parse CPU affinity for controller thread (comma-separated list)
+    it = info.hardware_parameters.find("controller_cpu_affinity");
+    if (it != info.hardware_parameters.end() && !it->second.empty()) {
+      std::stringstream ss(it->second);
+      std::string cpu_str;
+      while (std::getline(ss, cpu_str, ',')) {
+        hw_config_.controller_cpu_affinity.push_back(std::stoi(cpu_str));
       }
     }
 
@@ -296,6 +306,31 @@ OpenArm_v10RTHW::export_command_interfaces() {
 hardware_interface::CallbackReturn OpenArm_v10RTHW::on_activate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW"), "Activating motors...");
+
+  // Set CPU affinity for controller thread (read/write methods)
+  if (!hw_config_.controller_cpu_affinity.empty()) {
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+
+    for (int cpu : hw_config_.controller_cpu_affinity) {
+      CPU_SET(cpu, &cpuset);
+    }
+
+    if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0) {
+      RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHW"),
+                  "Failed to set controller thread CPU affinity: %s",
+                  strerror(errno));
+    } else {
+      // Format CPU list for logging
+      std::ostringstream cpu_list_str;
+      for (size_t i = 0; i < hw_config_.controller_cpu_affinity.size(); i++) {
+        if (i > 0) cpu_list_str << ",";
+        cpu_list_str << hw_config_.controller_cpu_affinity[i];
+      }
+      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW"),
+                  "Controller thread pinned to CPUs: %s", cpu_list_str.str().c_str());
+    }
+  }
 
   // Enable all motors
   ssize_t enabled = openarm_rt_->enable_all_motors_rt(1000);
@@ -594,7 +629,18 @@ void OpenArm_v10RTHW::can_thread_loop() {
     }
 
     // Send MIT commands (RT-safe, non-blocking)
-    ssize_t sent = openarm_rt_->send_mit_batch_rt(mit_params, num_joints_, 500);
+    // Use short timeout to avoid cycle overrun (CAN responses are fast)
+    struct timespec send_start, send_end;
+    clock_gettime(CLOCK_MONOTONIC, &send_start);
+
+    ssize_t sent = openarm_rt_->send_mit_batch_rt(mit_params, num_joints_,
+                                                    hw_config_.can_timeout_us);
+
+    clock_gettime(CLOCK_MONOTONIC, &send_end);
+    long send_duration_us =
+        ((send_end.tv_sec - send_start.tv_sec) * 1000000000L +
+         (send_end.tv_nsec - send_start.tv_nsec)) / 1000;
+
     if (sent < 0) {
       static auto last_error_time = std::chrono::steady_clock::now();
       auto now = std::chrono::steady_clock::now();
@@ -608,8 +654,16 @@ void OpenArm_v10RTHW::can_thread_loop() {
     }
 
     // Receive motor states (RT-safe, non-blocking)
-    ssize_t received =
-        openarm_rt_->receive_states_batch_rt(states, MAX_JOINTS, 500);
+    struct timespec recv_start, recv_end;
+    clock_gettime(CLOCK_MONOTONIC, &recv_start);
+
+    ssize_t received = openarm_rt_->receive_states_batch_rt(
+        states, MAX_JOINTS, hw_config_.can_timeout_us);
+
+    clock_gettime(CLOCK_MONOTONIC, &recv_end);
+    long recv_duration_us =
+        ((recv_end.tv_sec - recv_start.tv_sec) * 1000000000L +
+         (recv_end.tv_nsec - recv_start.tv_nsec)) / 1000;
 
     // Write states to buffer
     int write_idx = state_write_idx_.load(std::memory_order_acquire);
@@ -645,6 +699,37 @@ void OpenArm_v10RTHW::can_thread_loop() {
         (cycle_end.tv_nsec - cycle_start.tv_nsec);
     long cycle_duration_us = cycle_duration_ns / 1000;
 
+    // Track timing statistics
+    static long total_send_us = 0;
+    static long total_recv_us = 0;
+    static long max_send_us = 0;
+    static long max_recv_us = 0;
+    static size_t cycle_count = 0;
+    static auto last_stats_time = std::chrono::steady_clock::now();
+
+    total_send_us += send_duration_us;
+    total_recv_us += recv_duration_us;
+    max_send_us = std::max(max_send_us, send_duration_us);
+    max_recv_us = std::max(max_recv_us, recv_duration_us);
+    cycle_count++;
+
+    // Log timing stats every 5 seconds
+    auto now_steady = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now_steady - last_stats_time).count() > 5000) {
+      long avg_send_us = total_send_us / cycle_count;
+      long avg_recv_us = total_recv_us / cycle_count;
+      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
+                  "CAN timing stats: send avg=%ld us (max=%ld us), recv avg=%ld us (max=%ld us), cycles=%zu",
+                  avg_send_us, max_send_us, avg_recv_us, max_recv_us, cycle_count);
+      // Reset stats
+      total_send_us = 0;
+      total_recv_us = 0;
+      max_send_us = 0;
+      max_recv_us = 0;
+      cycle_count = 0;
+      last_stats_time = now_steady;
+    }
+
     if (cycle_duration_us > thread_cycle_time_.count()) {
       static auto last_warn_time = std::chrono::steady_clock::now();
       auto now = std::chrono::steady_clock::now();
@@ -652,8 +737,8 @@ void OpenArm_v10RTHW::can_thread_loop() {
                                                                 last_warn_time)
               .count() > 5000) {
         RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
-                    "CAN thread cycle overrun: %ld us (target: %ld us)",
-                    cycle_duration_us, thread_cycle_time_.count());
+                    "CAN thread cycle overrun: %ld us (target: %ld us), send: %ld us, recv: %ld us",
+                    cycle_duration_us, thread_cycle_time_.count(), send_duration_us, recv_duration_us);
         last_warn_time = now;
       }
     }

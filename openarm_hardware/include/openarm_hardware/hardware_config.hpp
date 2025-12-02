@@ -81,13 +81,14 @@ struct ControllerConfig {
 struct HardwareConfig {
   // CAN interface configuration
   std::string can_interface = "can0";
-  int can_timeout_us = 500;  // microseconds
+  int can_timeout_us = 200;  // microseconds (reduced for faster cycles)
 
   // RT thread configuration
   int rt_priority = 0;  // 0 = don't set, 1-99 = RT priority
   int worker_thread_priority =
       0;  // Priority for worker thread (unused in RT implementation)
-  std::vector<int> cpu_affinity;  // CPU cores to pin control loop thread to
+  std::vector<int> cpu_affinity;  // CPU cores to pin CAN thread to
+  std::vector<int> controller_cpu_affinity;  // CPU cores to pin controller thread to
 
   // Timing constraints
   int max_cycle_time_us = 1000;  // Maximum cycle time in microseconds
