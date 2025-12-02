@@ -23,7 +23,7 @@ namespace openarm_hardware {
 
 std::string error_code_to_string(uint8_t error_code) {
   switch (error_code) {
-    case 0x1:
+    case 0x0:
       return "No error";
     case 0x8:
       return "Overvoltage";
