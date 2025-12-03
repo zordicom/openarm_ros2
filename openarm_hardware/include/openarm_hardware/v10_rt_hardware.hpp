@@ -107,7 +107,7 @@ class OpenArm_v10RTHW : public hardware_interface::SystemInterface {
   };
 
   // Per-joint state and command buffers (double buffered)
-  static constexpr size_t MAX_JOINTS = 10;
+  static constexpr size_t MAX_JOINTS = 15;
   std::array<MotorState, MAX_JOINTS> state_buffers_[2];
   std::array<MotorCommand, MAX_JOINTS> cmd_buffers_[2];
 

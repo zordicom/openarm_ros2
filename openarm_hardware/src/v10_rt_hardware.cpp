@@ -182,7 +182,7 @@ hardware_interface::CallbackReturn OpenArm_v10RTHW::on_init(
               num_joints_, config_.arm_joints.size(),
               config_.gripper_joint.has_value() ? size_t(1) : size_t(0));
 
-  if (num_joints_ >= MAX_JOINTS) {
+  if (num_joints_ > MAX_JOINTS) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHW"),
                  "Too many joints. Got %ld, max allowed %ld", num_joints_,
                  MAX_JOINTS);
@@ -359,7 +359,6 @@ hardware_interface::CallbackReturn OpenArm_v10RTHW::on_activate(
   }
 
   // Initialize states and commands from enable feedback
-  // Store everything in motor frame (no conversions)
   for (size_t i = 0; i < num_joints_; ++i) {
     if (!states[i].valid) {
       RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHW"),
@@ -367,17 +366,23 @@ hardware_interface::CallbackReturn OpenArm_v10RTHW::on_activate(
       return CallbackReturn::ERROR;
     }
 
-    pos_states_[i] = states[i].position;
+    // Convert gripper position from motor radians to joint space (meters)
+    // states[i].position is always in motor radians from the motor
+    if (config_.gripper_joint.has_value() && i == config_.arm_joints.size()) {
+      pos_states_[i] = config_.gripper_joint->to_joint(states[i].position);
+      pos_commands_[i] = pos_states_[i];  // Initialize command in joint space
+    } else {
+      pos_states_[i] = states[i].position;
+      pos_commands_[i] = states[i].position;
+    }
+
     vel_states_[i] = states[i].velocity;
     tau_states_[i] = states[i].torque;
-
-    // Initialize commands to current state to hold position
-    pos_commands_[i] = states[i].position;
     vel_commands_[i] = states[i].velocity;
     tau_commands_[i] = states[i].torque;
 
     RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW"),
-                "Joint %zu initialized: pos=%.3f, vel=%.3f, tau=%.3f rad", i,
+                "Joint %zu initialized: pos=%.3f, vel=%.3f, tau=%.3f", i,
                 pos_commands_[i], vel_commands_[i], tau_commands_[i]);
   }
 
@@ -386,8 +391,13 @@ hardware_interface::CallbackReturn OpenArm_v10RTHW::on_activate(
   // initialized. Command buffers store motor positions (not joint space).
   for (size_t buf = 0; buf < 2; buf++) {
     for (size_t i = 0; i < num_joints_; ++i) {
-      // Use pos_commands_ which we've already populated correctly
-      cmd_buffers_[buf][i].position = pos_commands_[i];
+      // Convert gripper position from joint space to motor radians
+      if (config_.gripper_joint.has_value() && i == config_.arm_joints.size()) {
+        cmd_buffers_[buf][i].position = config_.gripper_joint->to_radians(pos_commands_[i]);
+      } else {
+        cmd_buffers_[buf][i].position = pos_commands_[i];
+      }
+
       cmd_buffers_[buf][i].velocity = vel_commands_[i];
       cmd_buffers_[buf][i].torque = tau_commands_[i];
 
@@ -414,11 +424,13 @@ hardware_interface::CallbackReturn OpenArm_v10RTHW::on_activate(
     kd_commands_[idx] = config_.gripper_joint->kd;
   }
 
-  // Initialize BOTH state buffers with current motor states
+  // Initialize BOTH state buffers with current motor states (in motor radians)
   // This prevents jumps when the background thread starts
+  // Note: state_buffers_ store motor positions, not joint space
   for (size_t buf = 0; buf < 2; buf++) {
     for (size_t i = 0; i < num_joints_; ++i) {
-      state_buffers_[buf][i].position = pos_states_[i];
+      // State buffers need motor positions, so use states[i].position directly
+      state_buffers_[buf][i].position = states[i].position;
       state_buffers_[buf][i].velocity = vel_states_[i];
       state_buffers_[buf][i].torque = tau_states_[i];
       state_buffers_[buf][i].valid = true;
@@ -526,7 +538,13 @@ hardware_interface::return_type OpenArm_v10RTHW::read(
       continue;
     }
 
-    pos_states_[i] = state.position;
+    // Convert gripper position from motor radians to joint space (meters)
+    if (config_.gripper_joint.has_value() && i == config_.arm_joints.size()) {
+      pos_states_[i] = config_.gripper_joint->to_joint(state.position);
+    } else {
+      pos_states_[i] = state.position;
+    }
+
     vel_states_[i] = state.velocity;
     tau_states_[i] = state.torque;
 
@@ -558,9 +576,14 @@ hardware_interface::return_type OpenArm_v10RTHW::write(
   int write_idx = cmd_write_idx_.load(std::memory_order_acquire);
 
   // Update all motor commands (including dynamic kp/kd)
-  // All positions are in motor frame (no gripper conversion)
   for (size_t i = 0; i < num_joints_; ++i) {
-    cmd_buffers_[write_idx][i].position = pos_commands_[i];
+    // Convert gripper position from joint space (meters) to motor radians
+    if (config_.gripper_joint.has_value() && i == config_.arm_joints.size()) {
+      cmd_buffers_[write_idx][i].position = config_.gripper_joint->to_radians(pos_commands_[i]);
+    } else {
+      cmd_buffers_[write_idx][i].position = pos_commands_[i];
+    }
+
     cmd_buffers_[write_idx][i].velocity = vel_commands_[i];
     cmd_buffers_[write_idx][i].torque = tau_commands_[i];
 
