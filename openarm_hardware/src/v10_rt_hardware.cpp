@@ -182,7 +182,7 @@ hardware_interface::CallbackReturn OpenArm_v10RTHW::on_init(
               num_joints_, config_.arm_joints.size(),
               config_.gripper_joint.has_value() ? size_t(1) : size_t(0));
 
-  if (num_joints_ >= MAX_JOINTS) {
+  if (num_joints_ > MAX_JOINTS) {
     RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHW"),
                  "Too many joints. Got %ld, max allowed %ld", num_joints_,
                  MAX_JOINTS);
