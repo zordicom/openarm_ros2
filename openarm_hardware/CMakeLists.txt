@@ -32,7 +32,7 @@ find_package(OpenArmCAN REQUIRED)
 add_library(${PROJECT_NAME} SHARED
   src/hardware_config.cpp
   src/v10_simple_hardware.cpp
-  src/hardware_config.cpp
+  src/v10_rt_hardware.cpp
 )
 
 target_include_directories(
@@ -43,6 +43,7 @@ target_include_directories(
 
 target_link_libraries(${PROJECT_NAME}
   OpenArmCAN::openarm_can
+  OpenArmCAN::openarm_can_realtime
   pthread
 )
 
