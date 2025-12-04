@@ -28,6 +28,7 @@
 #include "openarm/realtime/can.hpp"
 #include "openarm/realtime/canfd.hpp"
 #include "openarm/realtime/openarm.hpp"
+#include "rclcpp/logger.hpp"
 #include "openarm_hardware/hardware_config.hpp"
 #include "openarm_hardware/visibility_control.h"
 #include "rclcpp/macros.hpp"
@@ -143,6 +144,9 @@ class OpenArm_v10RTHW : public hardware_interface::SystemInterface {
   HardwareConfig hw_config_;
   size_t num_joints_{0};
   int thread_priority_{80};  // RT priority for CAN thread
+
+  // Thread logger (cached to avoid repeated get_logger calls)
+  rclcpp::Logger thread_logger_;
 
   // Helper methods
   bool parse_config(const hardware_interface::HardwareInfo& info);
