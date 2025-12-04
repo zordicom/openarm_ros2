@@ -30,7 +30,8 @@
 
 namespace openarm_hardware {
 
-OpenArm_v10RTHW::OpenArm_v10RTHW() = default;
+OpenArm_v10RTHW::OpenArm_v10RTHW()
+    : thread_logger_(rclcpp::get_logger("OpenArm_v10RTHW")) {}
 
 OpenArm_v10RTHW::~OpenArm_v10RTHW() {
   // Ensure thread is stopped
@@ -173,6 +174,9 @@ hardware_interface::CallbackReturn OpenArm_v10RTHW::on_init(
   if (!parse_config(info)) {
     return CallbackReturn::ERROR;
   }
+
+  // Initialize thread logger with hardware name
+  thread_logger_ = rclcpp::get_logger(info_.name + "_CANThread");
 
   num_joints_ =
       config_.arm_joints.size() + (config_.gripper_joint.has_value() ? 1 : 0);
@@ -393,7 +397,8 @@ hardware_interface::CallbackReturn OpenArm_v10RTHW::on_activate(
     for (size_t i = 0; i < num_joints_; ++i) {
       // Convert gripper position from joint space to motor radians
       if (config_.gripper_joint.has_value() && i == config_.arm_joints.size()) {
-        cmd_buffers_[buf][i].position = config_.gripper_joint->to_radians(pos_commands_[i]);
+        cmd_buffers_[buf][i].position =
+            config_.gripper_joint->to_radians(pos_commands_[i]);
       } else {
         cmd_buffers_[buf][i].position = pos_commands_[i];
       }
@@ -579,7 +584,8 @@ hardware_interface::return_type OpenArm_v10RTHW::write(
   for (size_t i = 0; i < num_joints_; ++i) {
     // Convert gripper position from joint space (meters) to motor radians
     if (config_.gripper_joint.has_value() && i == config_.arm_joints.size()) {
-      cmd_buffers_[write_idx][i].position = config_.gripper_joint->to_radians(pos_commands_[i]);
+      cmd_buffers_[write_idx][i].position =
+          config_.gripper_joint->to_radians(pos_commands_[i]);
     } else {
       cmd_buffers_[write_idx][i].position = pos_commands_[i];
     }
@@ -628,8 +634,7 @@ void OpenArm_v10RTHW::swap_command_buffers() {
 }
 
 void OpenArm_v10RTHW::can_thread_loop() {
-  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
-              "CAN thread started with %ld us cycle time",
+  RCLCPP_INFO(thread_logger_, "CAN thread started with %ld us cycle time",
               thread_cycle_time_.count());
 
   openarm::damiao_motor::MITParam mit_params[MAX_JOINTS];
@@ -673,8 +678,7 @@ void OpenArm_v10RTHW::can_thread_loop() {
       if (std::chrono::duration_cast<std::chrono::milliseconds>(now -
                                                                 last_error_time)
               .count() > 1000) {
-        RCLCPP_ERROR(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
-                     "Failed to send MIT commands");
+        RCLCPP_ERROR(thread_logger_, "Failed to send MIT commands");
         last_error_time = now;
       }
     }
@@ -692,9 +696,8 @@ void OpenArm_v10RTHW::can_thread_loop() {
       if (std::chrono::duration_cast<std::chrono::milliseconds>(
               now - last_partial_warn_time)
               .count() > 1000) {
-        RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
-                    "Partial receive: got %zd/%zu motor states", received,
-                    num_joints_);
+        RCLCPP_WARN(thread_logger_, "Partial receive: got %zd/%zu motor states",
+                    received, num_joints_);
         last_partial_warn_time = now;
       }
     }
@@ -743,6 +746,9 @@ void OpenArm_v10RTHW::can_thread_loop() {
     static long total_send_us = 0;
     static long total_recv_us = 0;
     static long total_work_us = 0;
+    static long total_send_sq_us = 0;
+    static long total_recv_sq_us = 0;
+    static long total_work_sq_us = 0;
     static long max_send_us = 0;
     static long max_recv_us = 0;
     static long max_work_us = 0;
@@ -752,6 +758,9 @@ void OpenArm_v10RTHW::can_thread_loop() {
     total_send_us += send_duration_us;
     total_recv_us += recv_duration_us;
     total_work_us += work_duration_us;
+    total_send_sq_us += send_duration_us * send_duration_us;
+    total_recv_sq_us += recv_duration_us * recv_duration_us;
+    total_work_sq_us += work_duration_us * work_duration_us;
     max_send_us = std::max(max_send_us, send_duration_us);
     max_recv_us = std::max(max_recv_us, recv_duration_us);
     max_work_us = std::max(max_work_us, work_duration_us);
@@ -765,15 +774,34 @@ void OpenArm_v10RTHW::can_thread_loop() {
       long avg_send_us = total_send_us / cycle_count;
       long avg_recv_us = total_recv_us / cycle_count;
       long avg_work_us = total_work_us / cycle_count;
-      RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
-                  "CAN timing stats: send avg=%ld us (max=%ld us), recv "
-                  "avg=%ld us (max=%ld us), work avg=%ld us (max=%ld us), cycles=%zu",
-                  avg_send_us, max_send_us, avg_recv_us, max_recv_us,
-                  avg_work_us, max_work_us, cycle_count);
+
+      // Calculate standard deviations
+      long var_send =
+          (total_send_sq_us / cycle_count) - (avg_send_us * avg_send_us);
+      long var_recv =
+          (total_recv_sq_us / cycle_count) - (avg_recv_us * avg_recv_us);
+      long var_work =
+          (total_work_sq_us / cycle_count) - (avg_work_us * avg_work_us);
+      long std_send_us = static_cast<long>(std::sqrt(std::max(0L, var_send)));
+      long std_recv_us = static_cast<long>(std::sqrt(std::max(0L, var_recv)));
+      long std_work_us = static_cast<long>(std::sqrt(std::max(0L, var_work)));
+
+      RCLCPP_INFO(thread_logger_,
+                  "CAN bus: "
+                  "send.avg=%ldus send.std=%ldus send.max=%ldus "
+                  "recv.avg=%ldus recv.std=%ldus recv.max=%ldus "
+                  "loop.avg=%ldus loop.std=%ldus loop.max=%ldus "
+                  "total_cycles=%zu",
+                  avg_send_us, std_send_us, max_send_us, avg_recv_us,
+                  std_recv_us, max_recv_us, avg_work_us, std_work_us,
+                  max_work_us, cycle_count);
       // Reset stats
       total_send_us = 0;
       total_recv_us = 0;
       total_work_us = 0;
+      total_send_sq_us = 0;
+      total_recv_sq_us = 0;
+      total_work_sq_us = 0;
       max_send_us = 0;
       max_recv_us = 0;
       max_work_us = 0;
@@ -788,7 +816,7 @@ void OpenArm_v10RTHW::can_thread_loop() {
       if (std::chrono::duration_cast<std::chrono::milliseconds>(now -
                                                                 last_warn_time)
               .count() > 5000) {
-        RCLCPP_WARN(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
+        RCLCPP_WARN(thread_logger_,
                     "CAN thread work overrun: %ld us (target: %ld us), send: "
                     "%ld us, recv: %ld us",
                     work_duration_us, thread_cycle_time_.count(),
@@ -798,8 +826,7 @@ void OpenArm_v10RTHW::can_thread_loop() {
     }
   }
 
-  RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW_Thread"),
-              "CAN thread stopped");
+  RCLCPP_INFO(thread_logger_, "CAN thread stopped");
 }
 
 }  // namespace openarm_hardware
