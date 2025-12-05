@@ -38,4 +38,14 @@
       Decouples CAN I/O from controller cycle using lock-free double buffering.
     </description>
   </class>
+  <class name="openarm_hardware/MITMockHardware"
+         type="openarm_hardware::MITMockHardware"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      Mock hardware interface that simulates MIT motor control.
+      Provides the same command/state interfaces as real DM motors (position, velocity, effort, kp, kd)
+      but simulates behavior instead of communicating with hardware.
+      Supports multiple joints.
+    </description>
+  </class>
 </library>
