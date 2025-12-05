@@ -518,10 +518,6 @@ hardware_interface::CallbackReturn OpenArm_v10RTHW::on_deactivate(
                 "Background thread stopped");
   }
 
-  // Disable all motors
-  openarm_rt_->disable_all_motors_rt(1000);
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
   RCLCPP_INFO(rclcpp::get_logger("OpenArm_v10RTHW"), "Motors deactivated");
   return CallbackReturn::SUCCESS;
 }
